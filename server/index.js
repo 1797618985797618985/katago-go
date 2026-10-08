@@ -600,6 +600,9 @@ async function startServer(options = {}) {
 
   hardware.start();
 
+  // 引擎状态一变就推给界面，别让界面一直停在"初始化中"
+  engine.onChange = () => broadcast();
+
   let loadingTick = 0;
   // 棋钟：每 0.5 秒推进一次。只有开了时间限制的对局才需要推送。
   const clockTimer = setInterval(() => {
@@ -622,7 +625,9 @@ async function startServer(options = {}) {
   // 引擎初始化放在后台跑，别挡住窗口打开
   const engineReady = engine.init().catch((err) => {
     console.error('[engine] 初始化异常:', err);
+    broadcast();
   });
+  engineReady.then(() => broadcast());
   broadcast();
 
   let closed = false;
