@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>围棋对战 · KataGo</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="toast-layer" class="toast-layer" aria-live="assertive"></div>
+
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo">囲</span>
+        <div>
+          <h1>围棋对战</h1>
+          <p class="subtle"><span id="app-version"></span><span id="engine-line">正在检测引擎…</span></p>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <button id="btn-sound" class="ghost-btn" type="button" title="开关提示音">🔊 提示音</button>
+        <button id="btn-help" class="ghost-btn" type="button">快捷键</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <!-- 左：对局设置 -->
+      <aside class="panel panel-left">
+        <h2>对局设置</h2>
+
+        <div class="field">
+          <label>对战模式</label>
+          <div class="segmented" id="mode-group">
+            <button type="button" data-mode="pve" class="active">人机对战</button>
+            <button type="button" data-mode="pvp">人人对战</button>
+          </div>
+        </div>
+
+        <div class="field" id="level-field">
+          <label for="level-select">难度（级位 / 段位）</label>
+          <select id="level-select"></select>
+          <p class="hint" id="level-hint"></p>
+        </div>
+
+        <div class="field" id="color-field">
+          <label>我执</label>
+          <div class="segmented" id="color-group">
+            <button type="button" data-color="black" class="active">黑棋（先手）</button>
+            <button type="button" data-color="white">白棋（后手）</button>
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="field">
+            <label for="board-size">棋盘</label>
+            <select id="board-size">
+              <option value="19" selected>19 路</option>
+              <option value="13">13 路</option>
+              <option value="9">9 路</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="handicap">让子</label>
+            <select id="handicap">
+              <option value="0" selected>不让子</option>
+              <option value="2">2 子</option>
+              <option value="3">3 子</option>
+              <option value="4">4 子</option>
+              <option value="5">5 子</option>
+              <option value="6">6 子</option>
+              <option value="7">7 子</option>
+              <option value="8">8 子</option>
+              <option value="9">9 子</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="field">
+            <label for="komi">贴目</label>
+            <input id="komi" type="number" step="0.5" value="7.5" />
+          </div>
+          <div class="field">
+            <label for="ruleset">规则</label>
+            <select id="ruleset">
+              <option value="chinese" selected>中国规则（数子）</option>
+              <option value="japanese">日本规则（数目）</option>
+            </select>
+          </div>
+        </div>
+
+        <button id="btn-new" class="primary-btn" type="button">开始新对局</button>
+
+        <div class="hardware-box" id="hardware-box" hidden>
+          <h3>实体棋盘</h3>
+          <p id="hardware-status" class="subtle"></p>
+          <div class="row">
+            <button id="btn-hw-test" class="ghost-btn" type="button">测试连接</button>
+            <button id="btn-hw-reset" class="ghost-btn" type="button">复位棋盘</button>
+          </div>
+        </div>
+      </aside>
+
+      <!-- 中：棋盘 -->
+      <section class="board-area">
+        <div class="board-wrap">
+          <canvas id="board" width="720" height="720"></canvas>
+          <div class="thinking" id="thinking" hidden>
+            <span class="spinner"></span>
+            <span id="thinking-text">电脑思考中…</span>
+          </div>
+        </div>
+        <div class="status-strip">
+          <div class="turn-chip" id="turn-chip">
+            <span class="stone-dot black"></span>
+            <span id="turn-text">黑棋落子</span>
+          </div>
+          <div class="stats">
+            <span>手数 <b id="stat-moves">0</b></span>
+            <span>黑提 <b id="stat-cap-black">0</b></span>
+            <span>白提 <b id="stat-cap-white">0</b></span>
+          </div>
+        </div>
+      </section>
+
+      <!-- 右：信息与操作 -->
+      <aside class="panel panel-right">
+        <h2>对局信息</h2>
+
+        <div class="info-grid">
+          <div><span class="subtle">模式</span><b id="info-mode">—</b></div>
+          <div><span class="subtle">难度</span><b id="info-level">—</b></div>
+          <div><span class="subtle">引擎</span><b id="info-engine">—</b></div>
+          <div><span class="subtle">状态</span><b id="info-status">—</b></div>
+        </div>
+
+        <div class="actions">
+          <button id="btn-pass" type="button">停一手</button>
+          <button id="btn-undo" type="button">悔棋</button>
+          <button id="btn-hint" type="button">提示</button>
+          <button id="btn-score" type="button">数子 / 终局</button>
+          <button id="btn-resign" type="button" class="danger">认输</button>
+          <button id="btn-sgf" type="button">导出 SGF</button>
+        </div>
+
+        <div id="result-box" class="result-box" hidden>
+          <h3 id="result-title">对局结束</h3>
+          <p id="result-text"></p>
+          <div id="result-detail" class="subtle"></div>
+        </div>
+
+        <div id="scoring-box" class="scoring-box" hidden>
+          <h3>标记死子</h3>
+          <p class="hint">点击棋盘上的棋块可以标记 / 取消「死子」，标好后点「确认终局」。</p>
+          <div id="score-preview" class="score-preview"></div>
+          <button id="btn-confirm-score" class="primary-btn" type="button">确认终局</button>
+        </div>
+
+        <h3 class="moves-title">落子记录</h3>
+        <ol id="move-list" class="move-list"></ol>
+      </aside>
+    </main>
+
+    <dialog id="help-dialog" class="dialog">
+      <h3>快捷键</h3>
+      <ul>
+        <li><kbd>P</kbd> 停一手</li>
+        <li><kbd>U</kbd> 悔棋</li>
+        <li><kbd>H</kbd> 提示</li>
+        <li><kbd>N</kbd> 开始新对局</li>
+        <li><kbd>S</kbd> 数子 / 终局</li>
+        <li><kbd>Esc</kbd> 关闭弹窗</li>
+      </ul>
+      <form method="dialog"><button class="primary-btn" type="submit">知道了</button></form>
+    </dialog>
+
+    <script src="app.js"></script>
+  </body>
+</html>

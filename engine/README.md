@@ -1,41 +1,65 @@
-# KataGo 引擎放置目录
+# 引擎与权重目录
 
-把 KataGo 的可执行文件与神经网络权重放到这个目录，程序启动时会自动检测。
+这个目录由 `tools/fetch-engine.ps1` 自动填充，内容**不进版本库**（`.gitignore` 已排除）。
 
-## 需要放置的文件
-
-| 文件 | 说明 | 示例名 |
-| --- | --- | --- |
-| 可执行文件 | KataGo 主程序 | `katago.exe`（Windows） / `katago`（Linux、macOS） |
-| 神经网络权重 | 主模型，决定棋力上限 | `model.bin.gz`（如 `kata1-b18c384nbt-s9996604416-d4316597426.bin.gz`） |
-| 人类风格模型（可选） | 用于「级位/段位」拟人化棋风 | `b18c384nbt-humanv0.bin.gz` |
-
-目录形如：
+## 目录结构
 
 ```
 engine/
-├── katago.exe
-├── model.bin.gz
-├── b18c384nbt-humanv0.bin.gz      # 可选
-└── gtp.cfg                        # 首次运行自动生成，可手动修改
+├── bin/
+│   ├── opencl/          KataGo OpenCL 版（只依赖显卡驱动，默认使用）
+│   ├── cuda/            KataGo CUDA 版（需本机已装 CUDA + cuDNN）
+│   └── cpu/             KataGo Eigen CPU 版（无独显时的兜底）
+├── models/
+│   ├── kata1-b18c384nbt-*.bin.gz      主权重，决定棋力上限
+│   ├── b18c384nbt-humanv0.bin.gz      人类风格权重，级位/低段位拟人化
+│   └── kata1-b6c96-*.txt.gz           轻量权重，低配机器使用
+├── logs/                引擎日志（运行时生成）
+├── _download/           下载缓存（可安全删除）
+└── hardware.log         硬件驱动为 log 模式时的指令日志
 ```
 
-## 下载地址
+## 获取方式
 
-- 发布页（含各平台可执行文件与权重）：<https://github.com/lightvector/KataGo/releases>
-- 权重下载页：<https://katagotraining.org/networks/>
+```powershell
+pwsh -File tools/fetch-engine.ps1
+```
 
-Windows 用户下载 `katago-vX.Y.Z-opencl-windows-x64.zip`（NVIDIA/AMD 显卡用 OpenCL 或 CUDA 版，
-纯 CPU 用 `eigen` 版），解压后把 `katago.exe` 与 `*.bin.gz` 放到本目录即可。
+常用参数：
 
-> 推荐使用 OpenCL/CUDA/TensorRT 版本，CPU 版本在 19 路棋盘上速度会明显偏慢。
+| 参数 | 说明 |
+| --- | --- |
+| `-Only opencl` | 只下载 OpenCL 版引擎 |
+| `-SkipNets` | 只补引擎，不重复下载权重 |
+| `-SkipHuman` | 不下载人类风格权重 |
+| `-Force` | 强制重新下载 |
 
-## 检测规则
+## 关于权重
 
-程序按以下顺序查找可执行文件与权重：
+KataGo 不需要自己训练。官方分布式训练项目
+[katagotraining.org](https://katagotraining.org/networks/) 产出的 `.bin.gz` / `.txt.gz`
+就是训练好的成品权重，下载后直接使用。
 
-1. `config.json` 中显式配置的路径；
-2. 本目录下匹配 `katago*`（或 `katago*.exe`）的文件；
-3. 本目录下匹配 `*.bin.gz` / `*.txt.gz` 的文件作为权重。
+程序启动时会自动探测 `bin/` 下**能真正跑起来**的构建（例如缺少 cuDNN 的 CUDA 版会被跳过），
+然后实测吞吐来决定用哪份权重。
 
-如果都没找到，程序会自动切换到内置的轻量级引擎（见根目录 `README.md`）。
+## 手动放置
+
+如果你想用自己的权重，直接把文件放进 `models/`，程序会自动识别：
+
+- 体积最大的非 human 权重 → 主权重
+- 文件名含 `human` 的权重 → 人类风格权重
+- 体积最小的权重 → 轻量权重
+
+也可以在 `config.json` 里显式指定：
+
+```json
+{
+  "katago": {
+    "path": "engine/bin/cuda/katago.exe",
+    "model": "engine/models/kata1-b28c512nbt-xxxx.bin.gz",
+    "humanModel": "engine/models/b18c384nbt-humanv0.bin.gz",
+    "strength": "main"
+  }
+}
+```
