@@ -258,7 +258,16 @@ switch ($Action) {
         if ($Topics.Count -gt 0) {
             # 话题标签必须走专用接口 PUT /repos/{owner}/{repo}/topics，
             # 用 PATCH 仓库的方式改是无效的（返回成功但不会生效）
-            $names = $Topics | ForEach-Object { $_ } | Where-Object { $_ } | Select-Object -Unique
+            # 注意：用 -File 调用脚本时逗号不会被解析成数组，
+            # 所以这里再按逗号/分号/空白拆一次，并统一转小写。
+            $names = @()
+            foreach ($t in $Topics) { $names += ($t -split '[,;\s]+') }
+            $names = $names |
+                Where-Object { $_ } |
+                ForEach-Object { $_.Trim().ToLower() } |
+                Where-Object { $_ -match '^[a-z0-9][a-z0-9-]{0,49}$' } |
+                Select-Object -Unique
+            if ($names.Count -eq 0) { throw '没有合法的话题标签（只能用小写字母、数字和连字符）' }
             $t = Invoke-GitHubApi -Method PUT -Path "/repos/$(Get-RepoFullName)/topics" -Body @{ names = @($names) }
             Write-Host "话题标签: $($t.names -join ', ')"
         }
