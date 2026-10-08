@@ -1,0 +1,20 @@
+{
+  "server": {
+    "port": 8080,
+    "host": "127.0.0.1"
+  },
+  "katago": {
+    "enabled": true,
+    "path": "engine/katago.exe",
+    "model": "engine/model.bin.gz",
+    "config": "engine/gtp.cfg",
+    "humanModel": "",
+    "threads": 4,
+    "useHumanModel": false
+  },
+  "defaults": {
+    "boardSize": 19,
+    "komi": 6.5,
+    "level": "10k"
+  }
+}

@@ -1,0 +1,10 @@
+node_modules/
+config.json
+engine/katago
+engine/katago.exe
+engine/*.bin.gz
+engine/*.txt.gz
+engine/logs/
+engine/gtp.cfg
+*.log
+.DS_Store
