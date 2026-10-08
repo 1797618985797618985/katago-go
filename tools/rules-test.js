@@ -201,6 +201,58 @@ section('SGF 导出');
   check('包含落子', sgf.includes(';B[pd]') && sgf.includes(';W[dp]'), sgf);
 }
 
+// ---------------------------------------------------------------- 让子局悔棋
+section('让子局的轮次');
+{
+  const g = new Game({ boardSize: 19, mode: 'pvp', handicap: 4 });
+  check('让子局开局由白先行', g.turn === WHITE);
+  // 让子点占的是四个角，这里挑空点下
+  g.play(9, 9, WHITE);
+  check('白下完轮到黑', g.turn === BLACK);
+  g.play(8, 9, BLACK);
+  check('黑下完轮到白', g.turn === WHITE);
+
+  g.undo(1);
+  check('悔掉黑那一手后轮到黑', g.turn === BLACK, `实际 ${g.turn === BLACK ? '黑' : '白'}`);
+  g.undo(1);
+  check('再悔掉白那一手后轮到白', g.turn === WHITE, `实际 ${g.turn === BLACK ? '黑' : '白'}`);
+
+  // 悔完之后还能正常接着下
+  check('悔完之后白仍可落子', g.play(9, 9, WHITE).ok);
+}
+
+// ---------------------------------------------------------------- 认输与 SGF 结果字段
+section('认输与 SGF 结果字段');
+{
+  const g = new Game({ boardSize: 9, mode: 'pvp' });
+  g.play(2, 2, BLACK);
+  g.resign(WHITE);
+  check('白认输则黑胜', g.result.winner === BLACK && g.status === 'finished');
+  const sgf = g.toSGF();
+  check('SGF 中盘胜写作 B+R（不是 B+R+）', /RE\[B\+R\]/.test(sgf), sgf);
+
+  const g2 = new Game({ boardSize: 9, mode: 'pvp' });
+  g2.pass(BLACK);
+  g2.pass(WHITE);
+  g2.confirmScore();
+  const sgf2 = g2.toSGF();
+  check('数目胜写作 B+3.5 这类格式', /RE\[[BW0]\+[\d.]+]/.test(sgf2), sgf2);
+}
+
+// ---------------------------------------------------------------- 终局前置条件
+section('终局前置条件');
+{
+  const g = new Game({ boardSize: 9, mode: 'pvp' });
+  g.play(2, 2, BLACK);
+  const r = g.confirmScore();
+  check('未进入数子阶段不能直接终局', !r.ok && r.reason === 'not-scoring', JSON.stringify(r));
+  check('对局状态未被改动', g.status === 'playing' && g.result === null);
+
+  g.beginScoring();
+  check('进入数子阶段后可以终局', g.confirmScore().ok);
+  check('重复终局被拒绝', !g.confirmScore().ok);
+}
+
 // ---------------------------------------------------------------- 坐标转换
 section('GTP 坐标转换');
 {
