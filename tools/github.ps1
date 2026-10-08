@@ -18,7 +18,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('ensure-repo', 'push', 'create-pr', 'merge-pr', 'release', 'repo-settings', 'status')]
+    [ValidateSet('ensure-repo', 'push', 'create-pr', 'merge-pr', 'release', 'repo-settings', 'protect-branch', 'status')]
     [string]$Action,
 
     [string]$RepoName = 'katago-go',
@@ -34,6 +34,9 @@ param(
     [string]$Notes = '',
     [string]$Description = '',
     [string[]]$Topics = @(),
+    [string[]]$RequiredChecks = @('规则引擎测试'),
+    [int]$Approvals = 0,
+    [switch]$EnforceAdmins,
     [switch]$Public,
     [switch]$Draft,
     [switch]$Prerelease
@@ -271,5 +274,39 @@ switch ($Action) {
             $t = Invoke-GitHubApi -Method PUT -Path "/repos/$(Get-RepoFullName)/topics" -Body @{ names = @($names) }
             Write-Host "话题标签: $($t.names -join ', ')"
         }
+    }
+
+    # 给主分支加保护：必须走 PR、必须过检查、禁止强推与删除。
+    # 批准数默认 0 —— 单人仓库如果要求 1 个批准，自己就合不了了。
+    'protect-branch' {
+        if (-not (Test-RemoteExists)) { throw "远程仓库不存在，请先运行 -Action ensure-repo" }
+
+        $checks = @()
+        foreach ($c in $RequiredChecks) { $checks += ($c -split '[,;]\s*') }
+        $checks = $checks | Where-Object { $_ } | Select-Object -Unique
+
+        $body = @{
+            required_status_checks        = @{ strict = $true; contexts = @($checks) }
+            enforce_admins                = [bool]$EnforceAdmins
+            required_pull_request_reviews = @{
+                required_approving_review_count = $Approvals
+                dismiss_stale_reviews           = $false
+                require_code_owner_reviews      = $false
+            }
+            restrictions                      = $null
+            allow_force_pushes                = $false
+            allow_deletions                   = $false
+            required_conversation_resolution  = $true
+        }
+
+        Invoke-GitHubApi -Method PUT -Path "/repos/$(Get-RepoFullName)/branches/$Base/protection" -Body $body | Out-Null
+        $p = Invoke-GitHubApi -Path "/repos/$(Get-RepoFullName)/branches/$Base/protection"
+        Write-Host "$Base 分支保护已设置："
+        Write-Host "  必须走 PR          : $($null -ne $p.required_pull_request_reviews)"
+        Write-Host "  需要批准数          : $($p.required_pull_request_reviews.required_approving_review_count)"
+        Write-Host "  必须通过的检查      : $($p.required_status_checks.contexts -join ', ')"
+        Write-Host "  要求分支是最新的    : $($p.required_status_checks.strict)"
+        Write-Host "  禁止强推 / 删除     : $((-not $p.allow_force_pushes.enabled)) / $((-not $p.allow_deletions.enabled))"
+        Write-Host "  管理员也受约束      : $($p.enforce_admins.enabled)"
     }
 }
