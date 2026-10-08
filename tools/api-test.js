@@ -36,6 +36,17 @@ async function call(path, method = 'GET', body) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** 从当前局面里挑一个空点，避免测试写死的坐标刚好被引擎占掉 */
+function findEmptyPoint(g, prefer = [[3, 3], [15, 15], [3, 15], [15, 3], [9, 9], [2, 2]]) {
+  for (const [x, y] of prefer) {
+    if (g.cells[y * g.boardSize + x] === 0) return { x, y };
+  }
+  for (let i = 0; i < g.cells.length; i++) {
+    if (g.cells[i] === 0) return { x: i % g.boardSize, y: Math.floor(i / g.boardSize) };
+  }
+  return null;
+}
+
 /** 等 AI 落子结束 */
 async function waitAi(timeoutMs = 60000) {
   const t0 = Date.now();
@@ -91,7 +102,9 @@ async function waitAi(timeoutMs = 60000) {
   check('越界坐标被拒绝', !r.ok);
 
   const beforeCount = (await call('/api/status')).game.moveCount;
-  await call('/api/game/move', 'POST', { x: 3, y: 15 });
+  const spot = findEmptyPoint(s.game);
+  const r2 = await call('/api/game/move', 'POST', { x: spot.x, y: spot.y });
+  check('人类继续落子成功（不挑被占的点）', r2.ok, JSON.stringify(r2.reason));
   s = await waitAi();
   check('人类第二手后 AI 继续应手', s.game.moveCount >= beforeCount + 2, `${beforeCount} -> ${s.game.moveCount}`);
 
@@ -114,7 +127,11 @@ async function waitAi(timeoutMs = 60000) {
   const sgfRes = await fetch(BASE + '/api/sgf');
   const sgf = await sgfRes.text();
   check('SGF 以 (; 开头', sgf.startsWith('(;'), sgf.slice(0, 40));
-  check('SGF 含版本号', /AP\[[^\]]+:1\.0\.0\]/.test(sgf), sgf.slice(0, 90));
+  check(
+    'SGF 版本号与服务端一致',
+    sgf.includes(`AP[katago-go:${status.version}]`),
+    `${sgf.slice(0, 90)} | 服务端版本 ${status.version}`,
+  );
   check('SGF 含棋盘大小', sgf.includes('SZ[19]'));
 
   // ---------------- 人人对战 + 数子
@@ -147,6 +164,40 @@ async function waitAi(timeoutMs = 60000) {
   check('确认终局', r.ok && r.game.status === 'finished');
   check('给出结果文本', Boolean(r.game.result && r.game.result.text), r.game.result && r.game.result.text);
   console.log(`    结果: ${r.game.result.text}`);
+
+  // ---------------- 人机对战：玩家执白
+  console.log('\n人机对战（玩家执白）');
+  r = await call('/api/game/new', 'POST', {
+    mode: 'pve',
+    boardSize: 9,
+    levelId: '15k',
+    humanColor: 'white',
+    komi: 7,
+  });
+  check('创建执白对局', r.ok && r.game.humanColor === 2 && r.game.aiColor === 1, JSON.stringify(r.game && [r.game.humanColor, r.game.aiColor]));
+  check('执白时轮到电脑先走', r.game.turn === 1);
+
+  s = await waitAi(60000);
+  check('电脑执黑自动先下了一手', s.game.moveCount >= 1 && s.game.moveLog[0].color === 1, `手数 ${s.game.moveCount}`);
+
+  // 认输必须是玩家认输，不能替电脑认输
+  r = await call('/api/game/resign', 'POST');
+  check('玩家认输后电脑（黑）获胜', r.ok && r.game.result.winner === 1, JSON.stringify(r.game.result));
+  check('执白时认输不会把胜利判给自己', r.game.result.winner !== r.game.humanColor);
+
+  // ---------------- 终局前置条件
+  console.log('\n终局前置条件');
+  r = await call('/api/game/new', 'POST', { mode: 'pvp', boardSize: 9, komi: 7 });
+  r = await call('/api/game/move', 'POST', { x: 4, y: 4 });
+  check('新建人人对局并落子', r.ok);
+  r = await call('/api/game/score', 'POST', { confirm: true });
+  check('未进入数子阶段不能直接确认终局', !r.ok && r.reason === 'not-scoring', JSON.stringify({ ok: r.ok, reason: r.reason, message: r.message }));
+  check('对局没有被误结束', r.game.status === 'playing');
+
+  r = await call('/api/game/score', 'POST');
+  check('可以主动进入数子阶段', r.ok && r.game.status === 'scoring');
+  r = await call('/api/game/score', 'POST', { confirm: true });
+  check('数子阶段可以确认终局', r.ok && r.game.status === 'finished');
 
   // ---------------- 硬件接口
   console.log('\n硬件接口');

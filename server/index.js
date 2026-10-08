@@ -280,7 +280,12 @@ async function handleApi(req, res, url) {
   }
 
   if (p === '/api/game/resign' && method === 'POST') {
-    const r = game.resign(game.turn);
+    if (game.status !== 'playing') {
+      return sendJson(res, 200, { ok: false, reason: 'not-playing', message: REASON_TEXT['not-playing'], ...fullState() });
+    }
+    // 人机对战里认输的永远是玩家，不能替电脑认输
+    const who = game.mode === 'pve' ? game.humanColor : game.turn;
+    const r = game.resign(who);
     if (r.ok) await hardware.onGameEnd(game);
     broadcast();
     return sendJson(res, 200, { ok: r.ok, ...fullState() });
@@ -297,6 +302,14 @@ async function handleApi(req, res, url) {
     const body = await readBody(req);
     if (body.confirm) {
       // 第二步：确认终局
+      if (game.status !== 'scoring') {
+        return sendJson(res, 200, {
+          ok: false,
+          reason: 'not-scoring',
+          message: game.status === 'finished' ? '对局已经结束' : '请先进入数子阶段并标记死子',
+          ...fullState(),
+        });
+      }
       const preview = game.computeScore();
       if (!game.result) game.confirmScore();
       await hardware.onGameEnd(game);

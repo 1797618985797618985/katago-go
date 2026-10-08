@@ -131,7 +131,8 @@ class Game {
   /** 根据棋盘重建该谁走（用于悔棋后校准）。 */
   _expectedTurn() {
     const moves = this.board.moves.length;
-    if (this.handicap > 0) return moves % 2 === 0 ? WHITE : BLACK;
+    // 让子局由白先行，而让子本身也占一条记录，所以奇偶与非让子局正好相反
+    if (this.handicap > 0) return moves % 2 === 1 ? WHITE : BLACK;
     return moves % 2 === 0 ? BLACK : WHITE;
   }
 
@@ -230,6 +231,9 @@ class Game {
 
   /** 确认终局，写入结果。 */
   confirmScore() {
+    if (this.status === 'finished') return { ok: false, reason: 'already-finished' };
+    // 必须先进入数子阶段（也就是先标记死子），否则死子会被当成活棋算分
+    if (this.status !== 'scoring') return { ok: false, reason: 'not-scoring' };
     const score = this.computeScore();
     const primary = this.ruleSet === 'japanese' ? score.japanese : score.chinese;
     this.result = {
@@ -335,8 +339,9 @@ class Game {
     }
     if (this.result) {
       const w = this.result.winner === BLACK ? 'B' : this.result.winner === WHITE ? 'W' : '0';
-      const re = this.result.method === 'resign' ? `R+` : `${this.result.margin}`;
-      body += `RE[${w}+${re}]`;
+      // SGF 规范：中盘胜写 B+R / W+R，数目胜写 B+3.5 这类
+      const how = this.result.method === 'resign' ? 'R' : `${this.result.margin}`;
+      body += `RE[${w}+${how}]`;
     }
     return `${body})`;
   }
