@@ -248,6 +248,47 @@ async function waitAi(timeoutMs = 60000) {
   r = await call('/api/game/position?ply=99');
   check('ply 超出手数时截到当前局面', r.position.ply === 2 && r.position.isLive === true);
 
+  // ---------------- 形势判断与胜率曲线
+  console.log('\n形势判断与胜率曲线');
+  r = await call('/api/game/new', 'POST', { mode: 'pvp', boardSize: 9, komi: 7 });
+  for (const [x, y] of [[2, 2], [2, 6], [6, 2]]) await call('/api/game/move', 'POST', { x, y });
+  check('为分析准备了一盘棋', r.ok !== undefined);
+
+  r = await call('/api/analysis?ply=3&visits=60');
+  if (r.reason === 'no-engine') {
+    check('没有引擎时形势判断给出明确提示', /KataGo/.test(r.message || ''), JSON.stringify(r.message));
+  } else {
+    check('形势判断返回成功', r.ok === true, JSON.stringify({ ok: r.ok, message: r.message }));
+    check('胜率在 0~1 之间', r.analysis.winrate >= 0 && r.analysis.winrate <= 1, String(r.analysis.winrate));
+    check('给出目差', Number.isFinite(r.analysis.scoreLead), String(r.analysis.scoreLead));
+    check('给出访问数', r.analysis.visits > 0, String(r.analysis.visits));
+    check('分析的是第 3 手之后', r.analysis.ply === 3, String(r.analysis.ply));
+    check('返回候选点列表', Array.isArray(r.analysis.moves) && r.analysis.moves.length > 0);
+    check(
+      '候选点带上了内部坐标',
+      r.analysis.moves.every((m) => Number.isInteger(m.x) && Number.isInteger(m.y)),
+      JSON.stringify(r.analysis.moves[0]),
+    );
+  }
+
+  r = await call('/api/analysis/curve', 'POST', { visits: 20 });
+  if (r.reason === 'no-engine' || (r.curve && r.curve.total === 0 && !r.ok)) {
+    check('无引擎时不启动曲线分析', true);
+  } else {
+    check('可以启动整盘分析', r.ok === true && r.curve.running === true, JSON.stringify(r.curve));
+    check('曲线总点数等于手数', r.curve.total === 3, String(r.curve.total));
+    await sleep(6000);
+    r = await call('/api/analysis/curve');
+    check('分析有进度', r.curve.done > 0, JSON.stringify({ done: r.curve.done, total: r.curve.total }));
+    check(
+      '曲线的胜率都在 0~1 之间',
+      r.curve.points.every((p) => p.winrate >= 0 && p.winrate <= 1),
+      JSON.stringify(r.curve.points),
+    );
+    r = await call('/api/analysis/curve', 'DELETE');
+    check('可以取消分析', r.ok === true && r.curve.running === false);
+  }
+
   // ---------------- 硬件接口
   console.log('\n硬件接口');
   const st = await call('/api/status');

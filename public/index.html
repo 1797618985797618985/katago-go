@@ -173,6 +173,23 @@
           <div id="result-detail" class="subtle"></div>
         </div>
 
+        <div class="eval-head">
+          <h3>形势判断</h3>
+          <label class="switch">
+            <input type="checkbox" id="eval-toggle" />
+            <span class="switch-track"><span class="switch-knob"></span></span>
+          </label>
+        </div>
+        <div id="eval-panel" class="eval-panel" hidden>
+          <div class="winrate-bar">
+            <div id="wr-black" class="wr-black" style="width: 50%"></div>
+            <div id="wr-white" class="wr-white" style="width: 50%"></div>
+            <span id="wr-text" class="wr-text">--</span>
+          </div>
+          <div id="eval-detail" class="subtle">等待分析…</div>
+          <ol id="eval-moves" class="eval-moves"></ol>
+        </div>
+
         <div id="scoring-box" class="scoring-box" hidden>
           <h3>标记死子</h3>
           <p class="hint">
@@ -193,6 +210,14 @@
           <button id="btn-review-next" type="button" title="下一手">▶</button>
           <button id="btn-review-last" type="button" title="跳到最新">⏭</button>
           <button id="btn-review-live" class="ghost-btn" type="button" hidden>回到当前</button>
+        </div>
+        <div class="curve-box">
+          <div class="curve-head">
+            <span class="subtle">胜率曲线</span>
+            <button id="btn-analyze-all" class="mini-btn" type="button">分析整盘</button>
+          </div>
+          <canvas id="curve" width="520" height="150"></canvas>
+          <div id="curve-hint" class="hint">对局结束后可以逐手分析，画出胜率曲线</div>
         </div>
         <ol id="move-list" class="move-list"></ol>
       </aside>

@@ -501,6 +501,168 @@ button {
 
 /* ---------------------------------------------------------------- 复盘 */
 
+/* 开关 */
+.eval-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 16px;
+}
+
+.eval-head h3 {
+  margin: 0;
+}
+
+.switch {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.switch input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.switch-track {
+  width: 38px;
+  height: 21px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  position: relative;
+  transition: background 0.18s, border-color 0.18s;
+}
+
+.switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  transition: transform 0.18s, background 0.18s;
+}
+
+.switch input:checked + .switch-track {
+  background: rgba(76, 154, 255, 0.35);
+  border-color: var(--accent);
+}
+
+.switch input:checked + .switch-track .switch-knob {
+  transform: translateX(17px);
+  background: var(--accent);
+}
+
+.eval-panel {
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--bg-soft);
+}
+
+.winrate-bar {
+  display: flex;
+  height: 22px;
+  border-radius: 6px;
+  overflow: hidden;
+  position: relative;
+  border: 1px solid var(--line);
+}
+
+.wr-black {
+  background: linear-gradient(180deg, #4a5058, #14171b);
+}
+
+.wr-white {
+  background: linear-gradient(180deg, #ffffff, #c9ced6);
+}
+
+.wr-text {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.75);
+  font-variant-numeric: tabular-nums;
+}
+
+.eval-moves {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  font-size: 12px;
+}
+
+.eval-moves li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  color: var(--text-dim);
+}
+
+.eval-moves li b {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.eval-moves .pv {
+  color: var(--text-dim);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 胜率曲线 */
+.curve-box {
+  margin-bottom: 10px;
+}
+
+.curve-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 5px;
+}
+
+.mini-btn {
+  padding: 3px 9px;
+  font-size: 11.5px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.mini-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.mini-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+#curve {
+  width: 100%;
+  height: 62px;
+  display: block;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--bg-soft);
+  cursor: pointer;
+}
+
 .review-bar {
   display: flex;
   align-items: center;
@@ -560,7 +722,7 @@ button {
   list-style: none;
   margin: 0;
   padding: 0;
-  max-height: 260px;
+  max-height: 200px;
   overflow-y: auto;
   font-size: 12.5px;
   font-variant-numeric: tabular-nums;

@@ -383,6 +383,29 @@ class Game {
   }
 
   /**
+   * 造一个"只走到第 ply 手"的对局副本，用来分析历史局面。
+   * 引擎要的是完整落子序列（GTP 只能一手一手喂），所以这里直接重放。
+   */
+  reviewGameAt(ply) {
+    const n = Math.max(0, Math.min(Math.floor(ply) || 0, this.moveLog.length));
+    const g = new Game({
+      mode: 'pvp',
+      boardSize: this.boardSize,
+      ruleSet: this.ruleSet,
+      handicap: this.handicap,
+      komi: this.komi,
+      timeControl: { enabled: false },
+    });
+    for (let i = 0; i < n; i++) {
+      const m = this.moveLog[i];
+      if (m.pass) g.pass(m.color);
+      else g.play(m.x, m.y, m.color);
+    }
+    g.status = 'finished';
+    return g;
+  }
+
+  /**
    * 取"下完第 ply 手之后"的局面，用于复盘。
    * ply = 0 表示空盘（让子局则是摆了让子之后），ply = 手数 表示当前局面。
    *

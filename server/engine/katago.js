@@ -6,6 +6,7 @@ const { spawnSync } = require('node:child_process');
 
 const { GtpClient } = require('./gtp');
 const { resolvePath, resolveDataPath } = require('../config');
+const { parseAnalyzeLine, summarize } = require('./analyze');
 const rules = require('../game/board');
 
 /**
@@ -278,6 +279,67 @@ class KataGoEngine {
   async finalScore(game) {
     await this.syncBoard(game);
     return String(await this.client.send('final_score', 180000)).trim();
+  }
+
+  /**
+   * 形势判断：对指定局面跑一次限定访问数的分析。
+   *
+   * 用的是 GTP 的 kata-analyze。它会持续把分析结果按行吐出来，
+   * 没有结束标志，所以这里的做法是：发出去之后轮询收集输出，
+   * 访问数达到目标或者超时，就再发一条无害命令把分析打断。
+   *
+   * @returns {Promise<{winrate, scoreLead, visits, moves}|null>} 黑棋视角
+   */
+  async analyze(game, { visits = 120, maxMs = 4000, intervalMs = 120 } = {}) {
+    if (!this.running) return null;
+    await this.syncBoard(game);
+    await this.applyParams(
+      {
+        visits,
+        maxTime: Math.max(1, maxMs / 1000),
+        playoutDoublingAdvantage: 0,
+        rootPolicyTemperature: 1,
+        rootNoiseEnabled: false,
+        humanProfile: '',
+      },
+      { useHuman: false },
+    );
+
+    const lines = [];
+    const onLog = (line) => {
+      if (line.startsWith('info move ')) lines.push(line);
+    };
+    this.client.on('log', onLog);
+
+    let stopped = false;
+    try {
+      this.client.proc.stdin.write(`kata-analyze interval ${intervalMs}\n`);
+      const t0 = Date.now();
+      while (Date.now() - t0 < maxMs) {
+        await new Promise((r) => setTimeout(r, 80));
+        const last = lines[lines.length - 1];
+        if (last) {
+          const parsed = parseAnalyzeLine(last);
+          if (parsed.length && (parsed[0].visits || 0) >= visits) break;
+        }
+      }
+    } finally {
+      this.client.off('log', onLog);
+      stopped = true;
+    }
+
+    // 打断分析：随便发一条无害的查询命令即可
+    if (stopped) {
+      try {
+        await this.client.send('kata-get-param maxVisits', 60000);
+      } catch {
+        /* 打断失败不影响结果 */
+      }
+    }
+
+    const last = lines[lines.length - 1];
+    if (!last) return null;
+    return summarize(parseAnalyzeLine(last), game.turn);
   }
 }
 

@@ -85,6 +85,20 @@ async function captureAndExit(url) {
 
   // 等界面把状态推完再截
   await new Promise((r) => setTimeout(r, 1500));
+  // 顺手把形势判断打开，截出来的图更有代表性
+  try {
+    await mainWindow.webContents.executeJavaScript("document.getElementById('eval-toggle').click()");
+    await new Promise((r) => setTimeout(r, 5000));
+  } catch {
+    /* 界面没准备好就算了 */
+  }
+  // 清掉鼠标悬停造成的半透明棋子，不然截出来像多了一颗子
+  try {
+    await mainWindow.webContents.executeJavaScript('window.__clearHover && window.__clearHover()');
+    await new Promise((r) => setTimeout(r, 300));
+  } catch {
+    /* 界面还没准备好就跳过 */
+  }
   const image = await mainWindow.webContents.capturePage();
   fs.mkdirSync(path.dirname(shotPath), { recursive: true });
   fs.writeFileSync(shotPath, image.toPNG());
@@ -103,6 +117,7 @@ async function createWindow() {
     minHeight: 720,
     backgroundColor: '#12151a',
     title: '围棋对战',
+    icon: path.join(__dirname, '..', 'build', 'icon.png'),
     // 截图时必须真正显示窗口：隐藏窗口时 Chromium 不会重绘，
     // capturePage() 拿到的会是旧画面
     show: true,

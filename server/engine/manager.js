@@ -272,6 +272,28 @@ class EngineManager {
     });
   }
 
+  /**
+   * 形势判断：分析第 ply 手之后的局面。
+   * 没有 KataGo 时返回 null，界面会把面板标成不可用。
+   */
+  async analyzeAt(game, ply, options = {}) {
+    if (!this.main || !this.main.running) return null;
+    return this._enqueue(async () => {
+      try {
+        const snapshot = game.reviewGameAt(ply);
+        const r = await this.main.analyze(snapshot, {
+          visits: options.visits || 120,
+          maxMs: options.maxMs || 4000,
+          intervalMs: options.intervalMs || 100,
+        });
+        return r ? { ...r, ply: snapshot.moveLog.length, turn: snapshot.turn, engine: 'katago' } : null;
+      } catch (err) {
+        console.warn(`[engine] 形势判断失败: ${err.message}`);
+        return null;
+      }
+    });
+  }
+
   async shutdown() {
     await Promise.all([
       this.main ? this.main.stop() : null,
