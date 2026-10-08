@@ -247,13 +247,20 @@ switch ($Action) {
 
     'repo-settings' {
         if (-not (Test-RemoteExists)) { throw "远程仓库不存在，请先运行 -Action ensure-repo" }
-        $payload = @{}
-        if ($Description) { $payload.description = $Description }
-        if ($Topics.Count -gt 0) { $payload.topics = $Topics }
-        if ($payload.Count -eq 0) { throw '请至少提供 -Description 或 -Topics' }
-        $repo = Invoke-GitHubApi -Method PATCH -Path "/repos/$(Get-RepoFullName)" -Body $payload
-        Write-Host "仓库简介: $($repo.description)"
-        $t = Invoke-GitHubApi -Path "/repos/$(Get-RepoFullName)/topics"
-        Write-Host "话题标签: $($t.names -join ', ')"
+        if (-not $Description -and $Topics.Count -eq 0) { throw '请至少提供 -Description 或 -Topics' }
+
+        if ($Description) {
+            # 简介走 PATCH /repos/{owner}/{repo}
+            $repo = Invoke-GitHubApi -Method PATCH -Path "/repos/$(Get-RepoFullName)" -Body @{ description = $Description }
+            Write-Host "仓库简介: $($repo.description)"
+        }
+
+        if ($Topics.Count -gt 0) {
+            # 话题标签必须走专用接口 PUT /repos/{owner}/{repo}/topics，
+            # 用 PATCH 仓库的方式改是无效的（返回成功但不会生效）
+            $names = $Topics | ForEach-Object { $_ } | Where-Object { $_ } | Select-Object -Unique
+            $t = Invoke-GitHubApi -Method PUT -Path "/repos/$(Get-RepoFullName)/topics" -Body @{ names = @($names) }
+            Write-Host "话题标签: $($t.names -join ', ')"
+        }
     }
 }
