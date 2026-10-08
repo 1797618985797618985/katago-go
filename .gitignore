@@ -12,6 +12,10 @@ engine/*
 *.log
 engine/hardware.log
 
+# 打包输出
+dist/
+out/
+
 # 编辑器 / 系统
 .DS_Store
 Thumbs.db

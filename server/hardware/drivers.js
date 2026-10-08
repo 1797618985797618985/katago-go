@@ -6,7 +6,7 @@ const path = require('node:path');
 const { EventEmitter } = require('node:events');
 const { spawn } = require('node:child_process');
 
-const { resolvePath } = require('../config');
+const { resolveDataPath } = require('../config');
 
 /**
  * 传输层：负责把一条 JSON 指令送到棋盘控制器。
@@ -42,7 +42,7 @@ class NullTransport extends Transport {
 class LogTransport extends Transport {
   constructor(options = {}) {
     super();
-    this.file = options.file || resolvePath('engine/hardware.log');
+    this.file = options.file || resolveDataPath('hardware.log');
     this.ready = false;
   }
 

@@ -8,6 +8,7 @@
 const { GoBoard } = require('../server/game/goban');
 const rules = require('../server/game/board');
 const { Game } = require('../server/game/game');
+const { gameFromSGF, parseNodes } = require('../server/game/sgf');
 
 const { BLACK, WHITE } = rules;
 
@@ -253,7 +254,109 @@ section('终局前置条件');
   check('重复终局被拒绝', !g.confirmScore().ok);
 }
 
+// ---------------------------------------------------------------- 计时与读秒
+section('计时与读秒');
+{
+  const g = new Game({
+    boardSize: 9,
+    mode: 'pvp',
+    timeControl: { enabled: true, mainTimeSec: 10, byoYomiSec: 5, byoYomiCount: 2 },
+  });
+  check('开启时间限制', g.clock.enabled === true);
+  check('初始剩余 = 基本用时 + 读秒', g.remainingSeconds(BLACK) === 20, String(g.remainingSeconds(BLACK)));
+  check('不限时的对局没有棋钟', new Game({ boardSize: 9, mode: 'pvp' }).clock.enabled === false);
+
+  // 手动拨时间：避免测试真的等
+  let t = 1_000_000;
+  g.clock.lastTick = t;
+  t += 3000;
+  g.tickClock(t);
+  check('基本用时递减', Math.abs(g.clock.black.main - 7) < 0.01, String(g.clock.black.main));
+
+  t += 7000;
+  g.tickClock(t);
+  check('基本用时走完自动进入读秒', g.clock.black.main === 0 && g.clock.black.period === 5);
+
+  t += 5000;
+  g.tickClock(t);
+  check('读秒耗尽一次，剩余次数减一', g.clock.black.periods === 1, String(g.clock.black.periods));
+
+  t += 5000;
+  g.tickClock(t);
+  check('再耗尽一次，剩余次数为 0', g.clock.black.periods === 0, String(g.clock.black.periods));
+
+  t += 5000;
+  const over = g.tickClock(t);
+  check('次数用尽后判超时', Boolean(over && over.timeout === BLACK), JSON.stringify(over));
+
+  const g2 = new Game({
+    boardSize: 9,
+    mode: 'pvp',
+    timeControl: { enabled: true, mainTimeSec: 1, byoYomiSec: 5, byoYomiCount: 2 },
+  });
+  g2.clock.lastTick = 0;
+  g2.tickClock(2000); // 基本用时走完
+  g2.tickClock(6000); // 读秒走了 4 秒
+  check('读秒已走 4 秒', Math.abs(g2.clock.black.period - 1) < 0.01, String(g2.clock.black.period));
+  g2.play(2, 2, BLACK);
+  check('落子后读秒重新计时', g2.clock.black.period === 5, String(g2.clock.black.period));
+  check('落子后基本用时仍然是 0', g2.clock.black.main === 0);
+
+  const r = g2.loseOnTime(BLACK);
+  check('超时判负', r.ok && g2.result.winner === WHITE && g2.status === 'finished');
+  check('结果文案写明超时', /超时/.test(g2.result.text), g2.result.text);
+}
+
 // ---------------------------------------------------------------- 坐标转换
+section('SGF 导入（复盘用）');
+{
+  const nodes = parseNodes('(;GM[1]SZ[19];B[pd];W[dp])');
+  check('能拆出 SGF 节点', nodes.length === 3 && nodes[1].B[0] === 'pd' && nodes[2].W[0] === 'dp', JSON.stringify(nodes));
+
+  const g = gameFromSGF('(;GM[1]FF[4]SZ[19]KM[7.5]RU[Chinese]PB[甲]PW[乙];B[pd];W[dp];B[pq])');
+  check('导入后手数正确', g.moveLog.length === 3, String(g.moveLog.length));
+  check('第一手坐标正确', g.moveLog[0].x === 15 && g.moveLog[0].y === 3, JSON.stringify(g.moveLog[0]));
+  check('导入的棋只能看不能下', g.reviewOnly === true && g.status === 'finished');
+  check('读出了双方名字', g.source.black === '甲' && g.source.white === '乙');
+  check('复盘可用', g.toState().canReview === true);
+
+  const gh = gameFromSGF('(;GM[1]SZ[19]HA[4]KM[0.5]AB[dd][pd][dp][pp];W[qf])');
+  check('导入让子局的让子数', gh.handicap === 4, String(gh.handicap));
+  check('让子位置正确', gh.board.get(3, 3) === BLACK && gh.board.get(15, 15) === BLACK);
+  check('让子局第一手是白棋', gh.moveLog[0].color === WHITE);
+  check('让子局悔棋轮次也正确', (() => { gh.undo(1); return gh.turn === WHITE; })());
+
+  const gp = gameFromSGF('(;GM[1]SZ[9]KM[7];B[cc];W[])');
+  check('能解析停一手', gp.moveLog.length === 2 && gp.moveLog[1].pass === true, JSON.stringify(gp.moveLog));
+
+  const gr = gameFromSGF('(;GM[1]SZ[9]KM[7]RE[B+R];B[cc];W[dd])');
+  check('能读出结果', gr.result && gr.result.winner === BLACK, JSON.stringify(gr.result));
+
+  const gr2 = gameFromSGF('(;GM[1]SZ[9]KM[7]RE[W+3.5];B[cc])');
+  check('能读出数目胜的差距', gr2.result && gr2.result.winner === WHITE && gr2.result.margin === 3.5, JSON.stringify(gr2.result));
+
+  // 导出再导入，应该还原成一摸一样的棋
+  const src = new Game({ boardSize: 19, mode: 'pvp', komi: 7.5 });
+  src.play(15, 3, BLACK);
+  src.play(3, 15, WHITE);
+  src.play(15, 15, BLACK);
+  const back = gameFromSGF(src.toSGF());
+  check('导出再导入手数一致', back.moveLog.length === 3);
+  check(
+    '导出再导入每一步都一致',
+    back.moveLog.every((m, i) => m.x === src.moveLog[i].x && m.y === src.moveLog[i].y && m.color === src.moveLog[i].color),
+  );
+  check('导出再导入棋盘一致', back.board.toArray().join(',') === src.board.toArray().join(','));
+
+  let threw = false;
+  try {
+    gameFromSGF('(;GM[1]SZ[21])');
+  } catch {
+    threw = true;
+  }
+  check('不支持的路数会报错', threw);
+}
+
 section('GTP 坐标转换');
 {
   check('Q16 -> (15,3)', JSON.stringify(rules.fromGtp(19, 'Q16')) === JSON.stringify({ x: 15, y: 3 }));

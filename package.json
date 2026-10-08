@@ -1,7 +1,8 @@
 {
   "name": "katago-go",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "private": true,
+  "productName": "围棋对战",
   "description": "基于 KataGo 的围棋对战程序：人机对战（级位/段位难度）与人人对战，可完全离线运行，并为实体电驱棋盘预留驱动接口",
   "keywords": [
     "go",
@@ -23,10 +24,15 @@
   "bugs": {
     "url": "https://github.com/MocunPrime/katago-go/issues"
   },
-  "main": "server/index.js",
+  "main": "desktop/main.js",
   "scripts": {
-    "start": "node server/index.js",
-    "dev": "node --watch server/index.js",
+    "start": "electron .",
+    "app": "electron .",
+    "dev": "electron . --dev",
+    "server": "node server/index.js",
+    "screenshot": "electron . --screenshot=docs/screenshot.png",
+    "build": "electron-builder --win",
+    "build:portable": "electron-builder --win portable",
     "test": "node tools/rules-test.js && node tools/engine-test.js",
     "test:api": "node tools/api-test.js",
     "smoke": "node tools/gtp-smoke.js",
@@ -36,10 +42,54 @@
   "engines": {
     "node": ">=18"
   },
-  "dependencies": {},
   "os": [
     "win32",
     "linux",
     "darwin"
-  ]
+  ],
+  "devDependencies": {
+    "electron": "^44.7.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.mocunprime.katagogo",
+    "productName": "围棋对战",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "desktop/**/*",
+      "server/**/*",
+      "public/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "engine",
+        "to": "engine",
+        "filter": [
+          "**/*",
+          "!_download{,/**}",
+          "logs{,/**}"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        { "target": "portable", "arch": ["x64"] },
+        { "target": "nsis", "arch": ["x64"] }
+      ]
+    },
+    "portable": {
+      "artifactName": "katago-go-${version}-portable.exe",
+      "unpackDirName": "katago-go"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "katago-go-${version}-setup.exe",
+      "shortcutName": "围棋对战"
+    },
+    "compression": "normal"
+  }
 }

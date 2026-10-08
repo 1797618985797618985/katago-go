@@ -89,6 +89,16 @@
           </div>
         </div>
 
+        <div class="field">
+          <label for="time-control">时间限制</label>
+          <select id="time-control">
+            <option value="none" selected>不限时</option>
+            <option value="10+3x30">10 分钟 + 3 次 30 秒读秒</option>
+            <option value="5+3x30">5 分钟 + 3 次 30 秒读秒</option>
+            <option value="1+3x20">1 分钟 + 3 次 20 秒读秒</option>
+          </select>
+        </div>
+
         <button id="btn-new" class="primary-btn" type="button">开始新对局</button>
 
         <div class="hardware-box" id="hardware-box" hidden>
@@ -108,6 +118,18 @@
           <div class="thinking" id="thinking" hidden>
             <span class="spinner"></span>
             <span id="thinking-text">电脑思考中…</span>
+          </div>
+        </div>
+        <div class="clock-bar" id="clock-bar" hidden>
+          <div class="clock-card" id="clock-black">
+            <span class="clock-who"><i class="stone-dot black"></i>黑棋</span>
+            <span class="clock-time" id="clock-black-time">--:--</span>
+            <span class="clock-byo" id="clock-black-byo"></span>
+          </div>
+          <div class="clock-card" id="clock-white">
+            <span class="clock-who"><i class="stone-dot white"></i>白棋</span>
+            <span class="clock-time" id="clock-white-time">--:--</span>
+            <span class="clock-byo" id="clock-white-byo"></span>
           </div>
         </div>
         <div class="status-strip">
@@ -141,7 +163,9 @@
           <button id="btn-score" type="button">数子 / 终局</button>
           <button id="btn-resign" type="button" class="danger">认输</button>
           <button id="btn-sgf" type="button">导出 SGF</button>
+          <button id="btn-sgf-load" type="button">导入 SGF</button>
         </div>
+        <input id="sgf-file" type="file" accept=".sgf,application/x-go-sgf,text/plain" hidden />
 
         <div id="result-box" class="result-box" hidden>
           <h3 id="result-title">对局结束</h3>
@@ -151,12 +175,25 @@
 
         <div id="scoring-box" class="scoring-box" hidden>
           <h3>标记死子</h3>
-          <p class="hint">点击棋盘上的棋块可以标记 / 取消「死子」，标好后点「确认终局」。</p>
+          <p class="hint">
+            进入数子阶段后会自动用 KataGo 判断死子；也可以点棋盘上的棋块手动改，改完点「确认终局」。
+          </p>
           <div id="score-preview" class="score-preview"></div>
-          <button id="btn-confirm-score" class="primary-btn" type="button">确认终局</button>
+          <div class="row">
+            <button id="btn-auto-dead" class="ghost-btn" type="button">重新自动判定</button>
+            <button id="btn-confirm-score" class="primary-btn" type="button">确认终局</button>
+          </div>
         </div>
 
         <h3 class="moves-title">落子记录</h3>
+        <div class="review-bar">
+          <button id="btn-review-first" type="button" title="回到开头">⏮</button>
+          <button id="btn-review-prev" type="button" title="上一手">◀</button>
+          <span id="review-label">当前局面</span>
+          <button id="btn-review-next" type="button" title="下一手">▶</button>
+          <button id="btn-review-last" type="button" title="跳到最新">⏭</button>
+          <button id="btn-review-live" class="ghost-btn" type="button" hidden>回到当前</button>
+        </div>
         <ol id="move-list" class="move-list"></ol>
       </aside>
     </main>

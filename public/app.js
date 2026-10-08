@@ -41,6 +41,22 @@ const els = {
   hardwareBox: $('#hardware-box'),
   hardwareStatus: $('#hardware-status'),
   toastLayer: $('#toast-layer'),
+  clockBar: $('#clock-bar'),
+  clockBlack: $('#clock-black'),
+  clockWhite: $('#clock-white'),
+  clockBlackTime: $('#clock-black-time'),
+  clockBlackByo: $('#clock-black-byo'),
+  clockWhiteTime: $('#clock-white-time'),
+  clockWhiteByo: $('#clock-white-byo'),
+  timeControl: $('#time-control'),
+  reviewBar: document.querySelector('.review-bar'),
+  reviewLabel: $('#review-label'),
+  btnReviewFirst: $('#btn-review-first'),
+  btnReviewPrev: $('#btn-review-prev'),
+  btnReviewNext: $('#btn-review-next'),
+  btnReviewLast: $('#btn-review-last'),
+  btnReviewLive: $('#btn-review-live'),
+  sgfFile: $('#sgf-file'),
 };
 
 const ui = {
@@ -50,6 +66,8 @@ const ui = {
   hover: null,
   hintPoint: null,
   sending: false,
+  /** 复盘：null = 看当前局面；否则是 {ply, cells, lastMove, turn, ...} */
+  review: null,
 };
 
 let state = { game: null, engine: null, hardware: null, levels: [], aiThinking: false };
@@ -213,7 +231,10 @@ const Board = (() => {
 
     const { pad, cell } = geometry;
     const g = state.game;
-    const cells = g ? g.cells : new Array(size * size).fill(0);
+    // 复盘时看的是历史局面，其余情况看当前局面
+    const view = ui.review || g;
+    const reviewing = Boolean(ui.review);
+    const cells = view ? view.cells : new Array(size * size).fill(0);
 
     // 网格
     ctx.strokeStyle = 'rgba(60, 40, 15, 0.75)';
@@ -262,7 +283,7 @@ const Board = (() => {
     }
 
     // 领地（数子阶段）
-    if (g && g.status !== 'playing' && g.scorePreview) {
+    if (!reviewing && g && g.status !== 'playing' && g.scorePreview) {
       const dead = new Set(g.deadStones || []);
       for (const t of g.scorePreview.territory || []) {
         const idx = t.y * size + t.x;
@@ -290,11 +311,11 @@ const Board = (() => {
     ctx.shadowOffsetY = 0;
 
     // 最后一手
-    if (g && g.lastMove) {
-      const [px, py] = pointToXY(g.lastMove.x, g.lastMove.y);
+    if (view && view.lastMove) {
+      const [px, py] = pointToXY(view.lastMove.x, view.lastMove.y);
       ctx.beginPath();
       ctx.arc(px, py, cell * 0.16, 0, Math.PI * 2);
-      ctx.fillStyle = g.lastMove.color === 1 ? 'rgba(255,255,255,0.92)' : 'rgba(20,20,20,0.85)';
+      ctx.fillStyle = view.lastMove.color === 1 ? 'rgba(255,255,255,0.92)' : 'rgba(20,20,20,0.85)';
       ctx.fill();
     }
 
@@ -310,7 +331,7 @@ const Board = (() => {
     }
 
     // 悬停预览
-    if (ui.hover && g && g.status === 'playing') {
+    if (ui.hover && g && g.status === 'playing' && !reviewing) {
       const idx = ui.hover.y * size + ui.hover.x;
       const occupied = cells[idx] !== 0;
       const legal = !occupied && !ui.hoverIllegal;
@@ -439,6 +460,10 @@ async function tryPlay(x, y) {
     toast('还没有开始对局', '请先在左侧点击「开始新对局」', 'warn');
     return;
   }
+  if (ui.review) {
+    toast('正在复盘', '点「回到当前」后才能继续落子', 'warn', 2600);
+    return;
+  }
   if (ui.sending) return;
 
   // 数子阶段：点击是标记死子
@@ -491,8 +516,11 @@ function applyState(next) {
       ui.hintPoint = null;
     }
   }
-  if (g && g.moveCount !== prevMoveCount) Board.draw();
-  else Board.draw();
+  // 有新的一手、或者换了新对局，就退出复盘，避免看的是过期局面
+  if (ui.review && (!g || g.id !== prevId || g.moveCount !== prevMoveCount)) {
+    ui.review = null;
+  }
+  Board.draw();
 
   render();
 }
@@ -501,7 +529,7 @@ function render() {
   const g = state.game;
   const e = state.engine || {};
 
-  if (state.version) els.appVersion.textContent = `v${state.version}`;
+  if (state.version) els.appVersion.textContent = `v${state.version} · `;
 
   // 引擎信息
   if (e.status === 'ready') {
@@ -529,6 +557,7 @@ function render() {
     els.infoLevel.textContent = '—';
     els.infoStatus.textContent = '未开始';
     els.turnText.textContent = '等待开始';
+    els.clockBar.hidden = true;
     return;
   }
 
@@ -543,6 +572,7 @@ function render() {
 
   const statusText = { playing: '对局中', scoring: '标记死子', finished: '已结束' }[g.status] || g.status;
   els.infoStatus.textContent = statusText;
+  renderClock(g);
 
   // 回合
   const dot = els.turnChip.querySelector('.stone-dot');
@@ -590,6 +620,8 @@ function render() {
 
   // 落子记录
   renderMoveList(g);
+  updateMoveHighlight();
+  renderReviewBar(g);
 
   // 硬件
   const hw = state.hardware;
@@ -612,11 +644,50 @@ function renderScorePreview(g) {
     `<div>已标记死子：<b>${dead}</b> 颗</div>` +
     `<div>数子法：黑 ${sp.chinese.black.total} ： 白 ${sp.chinese.white.total}</div>` +
     `<div>数目法：黑 ${sp.japanese.black.total} ： 白 ${sp.japanese.white.total}</div>` +
+    (g.engineScore ? `<div>KataGo 判定：<b>${g.engineScore}</b></div>` : '') +
     `<div>当前判定：<b>${sp.text}</b></div>`;
+}
+
+const fmtTime = (sec) => {
+  const s = Math.max(0, Math.ceil(sec));
+  return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+};
+
+/** 棋钟显示。剩余量直接来自服务端，界面不自己倒计时，免得两边对不齐。 */
+function renderClock(g) {
+  const c = g && g.clock;
+  if (!c || !c.enabled) {
+    els.clockBar.hidden = true;
+    return;
+  }
+  els.clockBar.hidden = false;
+
+  const sides = [
+    [c.black, 1, els.clockBlack, els.clockBlackTime, els.clockBlackByo],
+    [c.white, 2, els.clockWhite, els.clockWhiteTime, els.clockWhiteByo],
+  ];
+  for (const [side, color, card, timeEl, byoEl] of sides) {
+    card.classList.toggle('active', c.running === color);
+    if (side.main > 0) {
+      timeEl.textContent = fmtTime(side.main);
+      byoEl.textContent = '';
+      card.classList.remove('urgent');
+    } else {
+      const p = Math.max(0, side.period);
+      timeEl.textContent = `${Math.ceil(p)} 秒`;
+      byoEl.textContent = `读秒 ×${side.periods}`;
+      card.classList.toggle('urgent', p <= 5);
+    }
+  }
 }
 
 function renderMoveList(g) {
   const ol = els.moveList;
+  // 棋钟每 0.5 秒推一次状态，这里没必要跟着重建 DOM（会让滚动位置被重置）
+  const stamp = `${g.id}:${g.moveCount}`;
+  if (ui.moveListStamp === stamp) return;
+  ui.moveListStamp = stamp;
+
   if (!g.moveLog || g.moveLog.length === 0) {
     ol.innerHTML = '<li class="subtle" style="grid-template-columns:1fr">还没有落子</li>';
     return;
@@ -625,6 +696,7 @@ function renderMoveList(g) {
   const frag = document.createDocumentFragment();
   for (const m of g.moveLog) {
     const li = document.createElement('li');
+    li.dataset.ply = String(m.no);
     const coord = m.pass ? '停一手' : `${L[m.x]}${g.boardSize - m.y}`;
     li.innerHTML =
       `<span class="subtle">${m.no}</span>` +
@@ -636,6 +708,14 @@ function renderMoveList(g) {
   ol.innerHTML = '';
   ol.appendChild(frag);
   ol.scrollTop = ol.scrollHeight;
+}
+
+/** 只更新落子记录里的"当前手"高亮，不重建整个列表 */
+function updateMoveHighlight() {
+  const ply = ui.review ? ui.review.ply : -1;
+  for (const li of els.moveList.children) {
+    li.classList.toggle('current', ply >= 0 && Number(li.dataset.ply) === ply);
+  }
 }
 
 function buildLevelSelect() {
@@ -660,7 +740,9 @@ function buildLevelSelect() {
     const limit = state.engine && state.engine.maxLevelIndex != null && lv.index > state.engine.maxLevelIndex;
     opt.textContent = `${lv.label}（访问 ${lv.visits}${lv.recommendHandicap ? `，建议让 ${lv.recommendHandicap} 子` : ''}）${limit ? ' ⚠ 本机性能受限' : ''}`;
   }
-  sel.value = (state.game && state.game.levelId) || sel.value || '10k';
+  // 注意不能拿 sel.value 当兜底：新建 select 时它已经是第一个选项了
+  const wanted = (state.game && state.game.levelId) || '10k';
+  if ([...sel.options].some((o) => o.value === wanted)) sel.value = wanted;
 }
 
 function updateLevelHint() {
@@ -681,6 +763,59 @@ function updateLevelHint() {
 }
 
 // ---------------------------------------------------------------- 交互
+
+// ---------------------------------------------------------------- 复盘
+
+/** 跳到"下完第 ply 手"之后的局面。ply 等于总手数就是回到当前。 */
+async function gotoPly(ply) {
+  const g = state.game;
+  if (!g) return;
+  // 对局进行中不给复盘，只有结束之后才能翻
+  if (!g.canReview) {
+    toast('对局进行中不能复盘', '等下完这盘再看', 'warn', 2600);
+    return;
+  }
+  const total = g.moveCount;
+  const n = Math.max(0, Math.min(Math.floor(ply), total));
+  if (n === total) return exitReview();
+
+  const r = await api(`/api/game/position?ply=${n}`);
+  if (r.ok) {
+    ui.review = r.position;
+    ui.hover = null;
+    Board.draw();
+    render();
+  }
+}
+
+function exitReview() {
+  if (!ui.review) return;
+  ui.review = null;
+  Board.draw();
+  render();
+}
+
+function renderReviewBar(g) {
+  const total = g ? g.moveCount : 0;
+  const ply = ui.review ? ui.review.ply : total;
+  const allowed = Boolean(g && g.canReview && total > 0);
+  els.reviewBar.classList.toggle('reviewing', Boolean(ui.review));
+  els.reviewLabel.textContent = !g
+    ? '对局进行中不能复盘'
+    : total === 0
+      ? '还没有落子'
+      : !allowed
+        ? '对局进行中不能复盘'
+        : ui.review
+          ? `第 ${ply} 手 / 共 ${total} 手`
+          : '当前局面';
+  els.btnReviewLive.hidden = !ui.review;
+  els.btnReviewFirst.disabled = !allowed || ply <= 0;
+  els.btnReviewPrev.disabled = !allowed || ply <= 0;
+  els.btnReviewNext.disabled = !allowed || !ui.review || ply >= total;
+  els.btnReviewLast.disabled = !allowed || !ui.review || ply >= total;
+  els.reviewBar.classList.toggle('locked', !allowed);
+}
 
 function bind() {
   // 模式
@@ -768,6 +903,33 @@ function bind() {
     }
   });
 
+  $('#btn-auto-dead').addEventListener('click', async () => {
+    const r = await api('/api/game/auto-dead', { method: 'POST' });
+    if (r.ok) {
+      applyState(r);
+      Sound.info();
+      toast('已按 KataGo 的判断标好死子', `共 ${r.dead.length} 颗`, 'ok', 2600);
+    } else {
+      toast('自动判定不可用', r.message || '', 'warn', 4200);
+    }
+  });
+
+  // 复盘控制
+  els.btnReviewFirst.addEventListener('click', () => gotoPly(0));
+  els.btnReviewPrev.addEventListener('click', () => {
+    const cur = ui.review ? ui.review.ply : (state.game ? state.game.moveCount : 0);
+    gotoPly(cur - 1);
+  });
+  els.btnReviewNext.addEventListener('click', () => gotoPly((ui.review ? ui.review.ply : 0) + 1));
+  els.btnReviewLast.addEventListener('click', exitReview);
+  els.btnReviewLive.addEventListener('click', exitReview);
+
+  els.moveList.addEventListener('click', (ev) => {
+    const li = ev.target.closest('li[data-ply]');
+    if (!li) return;
+    gotoPly(Number(li.dataset.ply));
+  });
+
   $('#btn-hint').addEventListener('click', async () => {
     ui.hintPoint = null;
     const r = await api('/api/game/hint', { method: 'POST' });
@@ -789,6 +951,36 @@ function bind() {
 
   $('#btn-sgf').addEventListener('click', () => {
     window.location.href = '/api/sgf';
+  });
+
+  // 导入 SGF 复盘：用文件选择框读成文本再发给服务端
+  $('#btn-sgf-load').addEventListener('click', () => els.sgfFile.click());
+  els.sgfFile.addEventListener('change', async () => {
+    const file = els.sgfFile.files && els.sgfFile.files[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const r = await api('/api/sgf/load', { method: 'POST', body: { sgf: text } });
+      if (r.ok) {
+        ui.review = null;
+        ui.moveListStamp = null;
+        applyState(r);
+        const g = r.game;
+        toast(
+          '已载入棋谱',
+          `${g.boardSize} 路 · 共 ${g.moveCount} 手${g.source && g.source.black ? ` · ${g.source.black} vs ${g.source.white}` : ''}`,
+          'ok',
+          3200,
+        );
+        if (g.moveCount > 0) gotoPly(0);
+      } else {
+        toast('载入失败', r.message || '', 'error', 5000);
+      }
+    } catch (err) {
+      toast('读文件失败', String(err.message || err), 'error');
+    } finally {
+      els.sgfFile.value = '';
+    }
   });
 
   // 硬件
@@ -856,6 +1048,20 @@ function bind() {
   window.addEventListener('keydown', (ev) => {
     if (ev.target.tagName === 'INPUT' || ev.target.tagName === 'SELECT') return;
     const k = ev.key.toLowerCase();
+
+    // 复盘翻页
+    if (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight' || ev.key === 'Home' || ev.key === 'End') {
+      if (!state.game || !state.game.canReview) return;
+      const total = state.game.moveCount;
+      const cur = ui.review ? ui.review.ply : total;
+      if (ev.key === 'ArrowLeft') gotoPly(cur - 1);
+      else if (ev.key === 'ArrowRight') gotoPly(cur + 1);
+      else if (ev.key === 'Home') gotoPly(0);
+      else exitReview();
+      ev.preventDefault();
+      return;
+    }
+
     const map = { p: '#btn-pass', u: '#btn-undo', h: '#btn-hint', s: '#btn-score', n: '#btn-new' };
     if (map[k]) {
       const el = document.querySelector(map[k]);
@@ -870,6 +1076,19 @@ function bind() {
   window.__hardwareInput = (pt) => tryPlay(pt.x, pt.y);
 }
 
+/** 把下拉框的值解析成服务端要的时间限制对象。 */
+function parseTimeControl(value) {
+  if (!value || value === 'none') return { enabled: false };
+  const m = /^(\d+)\+(\d+)x(\d+)$/.exec(value);
+  if (!m) return { enabled: false };
+  return {
+    enabled: true,
+    mainTimeSec: Number(m[1]) * 60,
+    byoYomiSec: Number(m[2]),
+    byoYomiCount: Number(m[3]),
+  };
+}
+
 async function newGame() {
   const body = {
     mode: ui.mode,
@@ -879,6 +1098,7 @@ async function newGame() {
     handicap: Number($('#handicap').value),
     komi: Number($('#komi').value),
     ruleSet: $('#ruleset').value,
+    timeControl: parseTimeControl(els.timeControl.value),
   };
   const r = await api('/api/game/new', { method: 'POST', body });
   if (r.ok) {

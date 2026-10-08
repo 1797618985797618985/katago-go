@@ -5,7 +5,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const { GtpClient } = require('./gtp');
-const { resolvePath } = require('../config');
+const { resolvePath, resolveDataPath } = require('../config');
 const rules = require('../game/board');
 
 /**
@@ -93,7 +93,7 @@ class KataGoEngine {
    */
   _baseConfig(extra = {}) {
     const common = {
-      logDir: resolvePath('engine/logs').replace(/\\/g, '/'),
+      logDir: resolveDataPath('logs').replace(/\\/g, '/'),
       logAllGTPCommunication: false,
       logSearchInfo: false,
       logToStderr: false,
@@ -250,6 +250,34 @@ class KataGoEngine {
   /** 让引擎给一手"参考下法"（提示功能）。 */
   async hint(game, color, params, opts = {}) {
     return this.genmove(game, color, params, opts);
+  }
+
+  /**
+   * 让引擎判断哪些子是死子（GTP 的 final_status_list dead）。
+   * 返回死子坐标数组；引擎不支持这个命令时抛错，由上层降级处理。
+   */
+  async finalStatusDead(game) {
+    await this.syncBoard(game);
+    const answer = await this.client.send('final_status_list dead', 180000);
+    const text = String(answer).trim();
+    if (!text || /^none$/i.test(text)) return [];
+
+    const out = [];
+    for (const token of text.split(/\s+/)) {
+      if (/^pass$/i.test(token)) continue;
+      const pt = rules.fromGtp(game.boardSize, token);
+      if (pt) {
+        const idx = rules.idxOf(game.boardSize, pt.x, pt.y);
+        if (game.board.cells[idx] !== rules.EMPTY) out.push(idx);
+      }
+    }
+    return out;
+  }
+
+  /** 引擎给出的最终比分（如 "W+88.0"），用于交叉验证。 */
+  async finalScore(game) {
+    await this.syncBoard(game);
+    return String(await this.client.send('final_score', 180000)).trim();
   }
 }
 

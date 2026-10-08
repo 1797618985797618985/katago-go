@@ -17,6 +17,27 @@ function defaultKomi(size, handicap) {
   return 7.5;
 }
 
+/** 时间限制。默认不限时，保持和以前一样。 */
+const DEFAULT_TIME_CONTROL = {
+  enabled: false,
+  /** 每方基本用时（秒） */
+  mainTimeSec: 600,
+  /** 读秒：每一步的秒数 */
+  byoYomiSec: 30,
+  /** 读秒次数（用完就超时判负） */
+  byoYomiCount: 3,
+};
+
+function normalizeTimeControl(tc) {
+  if (!tc || !tc.enabled) return { ...DEFAULT_TIME_CONTROL, enabled: false };
+  return {
+    enabled: true,
+    mainTimeSec: Math.max(0, Number(tc.mainTimeSec) || 0),
+    byoYomiSec: Math.max(0, Number(tc.byoYomiSec) || 0),
+    byoYomiCount: Math.max(0, Math.round(Number(tc.byoYomiCount) || 0)),
+  };
+}
+
 /**
  * 一局棋的完整会话：规则、回合、终局判定、数子与 SGF。
  * 该对象是服务端的唯一权威状态，前端只做展示与乐观预览。
@@ -44,6 +65,90 @@ class Game {
     this.result = null;
     this.deadStones = new Set();
     this.moveLog = []; // UI 用：{ no, color, x, y, pass?, captured }
+
+    this.timeControl = normalizeTimeControl(options.timeControl);
+    this.clock = this._createClock();
+    /** KataGo 给出的最终比分（如 W+88.0），只作参考显示 */
+    this.engineScore = null;
+    /** 导入 SGF 来的对局：只能复盘，不能接着下 */
+    this.reviewOnly = false;
+    /** 导入来源信息（双方名字等） */
+    this.source = null;
+  }
+
+  _createClock() {
+    const tc = this.timeControl;
+    // period 只在进入读秒后才开始走，初始为 0
+    const mk = () => ({ main: tc.mainTimeSec, periods: tc.byoYomiCount, period: 0 });
+    return {
+      enabled: tc.enabled,
+      black: mk(),
+      white: mk(),
+      running: tc.enabled ? this.turn : null,
+      lastTick: Date.now(),
+    };
+  }
+
+  /** 某一方当前还剩多少秒（基本用时 + 读秒次数×每次秒数），用于限制 AI 思考时间。 */
+  remainingSeconds(color) {
+    if (!this.clock.enabled) return Infinity;
+    const s = color === BLACK ? this.clock.black : this.clock.white;
+    return s.main + s.periods * this.timeControl.byoYomiSec + Math.max(0, s.period);
+  }
+
+  /**
+   * 推进计时。由服务端每 0.5 秒调用一次。
+   * 返回 { timeout: color } 表示这一方超时了，其余情况返回 null。
+   */
+  tickClock(now = Date.now()) {
+    const c = this.clock;
+    if (!c.enabled || this.status !== 'playing') {
+      c.lastTick = now;
+      return null;
+    }
+    const dt = Math.max(0, (now - c.lastTick) / 1000);
+    c.lastTick = now;
+    if (dt === 0) return null;
+
+    const side = this.turn === BLACK ? c.black : c.white;
+    if (side.main > 0) {
+      side.main = Math.max(0, side.main - dt);
+      // 基本用时刚好走完，进入读秒
+      if (side.main === 0) side.period = this.timeControl.byoYomiSec;
+      return null;
+    }
+
+    side.period -= dt;
+    if (side.period > 0) return null;
+
+    // 读秒用完一次；还有剩余次数就续上，否则判超时
+    if (side.periods > 0) {
+      side.periods -= 1;
+      side.period = this.timeControl.byoYomiSec;
+      return null;
+    }
+    return { timeout: this.turn };
+  }
+
+  /** 每落一手，该方的读秒重新计时。 */
+  _resetByoYomi(color) {
+    const c = this.clock;
+    if (!c.enabled) return;
+    const side = color === BLACK ? c.black : c.white;
+    if (side.main <= 0) side.period = this.timeControl.byoYomiSec;
+  }
+
+  /** 超时判负。 */
+  loseOnTime(color) {
+    if (this.status === 'finished') return { ok: false, reason: 'already-finished' };
+    this.status = 'finished';
+    this.result = {
+      winner: rules.other(color),
+      margin: null,
+      method: 'time',
+      text: `${this.colorName(rules.other(color))}胜（${this.colorName(color)}超时）`,
+    };
+    return { ok: true, result: this.result };
   }
 
   get aiColor() {
@@ -78,6 +183,7 @@ class Game {
     const res = this.board.play(x, y, who);
     if (!res.ok) return res;
 
+    this._resetByoYomi(who);
     this._logMove({ color: who, x, y, captured: res.captured.length });
     this.passes = 0;
     this.turn = rules.other(who);
@@ -91,6 +197,7 @@ class Game {
     if (who !== this.turn) return { ok: false, reason: 'wrong-turn' };
 
     this.board.playPass(who);
+    this._resetByoYomi(who);
     this._logMove({ color: who, pass: true, captured: 0 });
     this.passes += 1;
     this.turn = rules.other(who);
@@ -170,6 +277,20 @@ class Game {
     const cells = Uint8Array.from(this.board.cells);
     for (const idx of this.deadStones) cells[idx] = EMPTY;
     return cells;
+  }
+
+  /**
+   * 一次性设置死子（自动判定用）。
+   * 传入的是索引数组；会自动过滤掉空点，保证标记的一定是子。
+   */
+  setDeadStones(indices) {
+    this.deadStones = new Set();
+    for (const idx of indices || []) {
+      if (idx >= 0 && idx < this.board.cells.length && this.board.cells[idx] !== EMPTY) {
+        this.deadStones.add(idx);
+      }
+    }
+    return { ok: true, dead: Array.from(this.deadStones) };
   }
 
   /**
@@ -261,6 +382,34 @@ class Game {
     return this.turn;
   }
 
+  /**
+   * 取"下完第 ply 手之后"的局面，用于复盘。
+   * ply = 0 表示空盘（让子局则是摆了让子之后），ply = 手数 表示当前局面。
+   *
+   * 棋盘在每次落子前都会存一份快照，所以这里不用重新推演，
+   * 直接取第 ply 份快照即可（快照下标就是"已经下了几手"）。
+   */
+  positionAt(ply) {
+    const total = this.moveLog.length;
+    const n = Math.max(0, Math.min(Math.floor(ply) || 0, total));
+    const isLive = n === total;
+
+    const cells = isLive ? this.board.toArray() : Array.from(this.board.snapshots[n].cells);
+    const captures = isLive ? { ...this.board.captures } : { ...this.board.snapshots[n].captures };
+    const last = n > 0 ? this.moveLog[n - 1] : null;
+
+    return {
+      ply: n,
+      total,
+      isLive,
+      cells,
+      captures: { black: captures[BLACK], white: captures[WHITE] },
+      lastMove: last && !last.pass ? { x: last.x, y: last.y, color: last.color, no: last.no } : null,
+      turn: n < total ? this.moveLog[n].color : this.turn,
+      move: last || null,
+    };
+  }
+
   toState() {
     // 数子阶段额外给出计分预览，便于界面画出地盘与实时比分
     let scorePreview = null;
@@ -306,7 +455,24 @@ class Game {
       deadStones: Array.from(this.deadStones),
       scorePreview,
       result: this.result,
+      engineScore: this.engineScore,
+      reviewOnly: this.reviewOnly,
+      source: this.source,
+      /** 复盘是否可用：对局进行中不给看，只有结束之后才能翻 */
+      canReview: this.status === 'finished',
       canUndo: this.moveLog.length > 0,
+      // 时间限制：直接把剩余量发给界面，界面不自己算，免得两边对不齐
+      timeControl: this.timeControl,
+      clock: this.clock.enabled
+        ? {
+            enabled: true,
+            running: this.status === 'playing' ? this.turn : null,
+            black: { ...this.clock.black },
+            white: { ...this.clock.white },
+            byoYomiSec: this.timeControl.byoYomiSec,
+            byoYomiCount: this.timeControl.byoYomiCount,
+          }
+        : { enabled: false },
       createdAt: this.createdAt,
     };
   }
@@ -347,4 +513,4 @@ class Game {
   }
 }
 
-module.exports = { Game, defaultKomi, BLACK, WHITE, EMPTY };
+module.exports = { Game, defaultKomi, normalizeTimeControl, DEFAULT_TIME_CONTROL, BLACK, WHITE, EMPTY };
