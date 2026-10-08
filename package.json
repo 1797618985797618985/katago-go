@@ -34,7 +34,7 @@
     "screenshot": "electron . --screenshot=docs/screenshot.png",
     "build": "electron-builder --win",
     "build:portable": "electron-builder --win portable",
-    "test": "node tools/rules-test.js && node tools/engine-test.js",
+    "test": "node tools/check-version.js && node tools/rules-test.js && node tools/engine-test.js",
     "test:api": "node tools/api-test.js",
     "smoke": "node tools/gtp-smoke.js",
     "mock-board": "node tools/mock-board.js",
