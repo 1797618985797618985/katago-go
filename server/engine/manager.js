@@ -53,6 +53,12 @@ class EngineManager {
     this.warnings = [];
     /** 状态变成 loading 的时刻，用来在界面上显示已经等了多久 */
     this.loadingSince = null;
+    /**
+     * 状态变化时的回调。引擎初始化是异步的（首次还要做几分钟的 GPU 调优），
+     * 如果不在变化时主动通知，界面就会一直停在"初始化中"，
+     * 除非用户碰巧做了别的操作触发一次刷新。
+     */
+    this.onChange = null;
 
     this.queue = Promise.resolve();
   }
@@ -62,6 +68,16 @@ class EngineManager {
     const run = this.queue.then(fn, fn);
     this.queue = run.catch(() => {});
     return run;
+  }
+
+  /** 通知外部状态变了（界面据此实时刷新） */
+  _notify() {
+    if (!this.onChange) return;
+    try {
+      this.onChange();
+    } catch {
+      /* 通知失败不影响引擎本身 */
+    }
   }
 
   // ------------------------------------------------------------ 初始化
@@ -121,6 +137,7 @@ class EngineManager {
       this.visitsPerSec = await this.main.measureThroughput({ visits: 300, boardSize });
       this.maxLevelIndex = levelIndexFromVisits(this.visitsPerSec * TARGET_MOVE_SECONDS);
       this.status = 'ready';
+      this._notify();
       console.log(
         `[engine] ${chosen.label} + ${this.modelKind} 权重，加载 ${((Date.now() - t0) / 1000).toFixed(1)}s，` +
           `实测 ${this.visitsPerSec.toFixed(1)} 访问/秒，最高可稳定支持 ` +
@@ -139,6 +156,7 @@ class EngineManager {
         this.warnings.push(`人类风格模型未能启用：${err.message}`);
         console.warn(`[engine] 人类风格模型启动失败: ${err.message}`);
         this.human = null;
+        this._notify();
       });
     }
   }
@@ -166,6 +184,7 @@ class EngineManager {
         await eng.start();
         this.human = eng;
         console.log('[engine] 人类风格模型就绪（级位/低段位将使用拟人化走法）');
+        this._notify();
         return eng;
       })().finally(() => {
         this._humanWarmPromise = null;
@@ -180,6 +199,7 @@ class EngineManager {
     this.visitsPerSec = 0;
     this.maxLevelIndex = Math.max(this.maxLevelIndex, 20); // 内置引擎大概到 10 级
     console.log(`[engine] 使用内置引擎（${reason}）`);
+    this._notify();
   }
 
   // ------------------------------------------------------------ 出子
