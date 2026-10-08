@@ -36,6 +36,17 @@ async function call(path, method = 'GET', body) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** 从当前局面里挑一个空点，避免测试写死的坐标刚好被引擎占掉 */
+function findEmptyPoint(g, prefer = [[3, 3], [15, 15], [3, 15], [15, 3], [9, 9], [2, 2]]) {
+  for (const [x, y] of prefer) {
+    if (g.cells[y * g.boardSize + x] === 0) return { x, y };
+  }
+  for (let i = 0; i < g.cells.length; i++) {
+    if (g.cells[i] === 0) return { x: i % g.boardSize, y: Math.floor(i / g.boardSize) };
+  }
+  return null;
+}
+
 /** 等 AI 落子结束 */
 async function waitAi(timeoutMs = 60000) {
   const t0 = Date.now();
@@ -91,7 +102,9 @@ async function waitAi(timeoutMs = 60000) {
   check('越界坐标被拒绝', !r.ok);
 
   const beforeCount = (await call('/api/status')).game.moveCount;
-  await call('/api/game/move', 'POST', { x: 3, y: 15 });
+  const spot = findEmptyPoint(s.game);
+  const r2 = await call('/api/game/move', 'POST', { x: spot.x, y: spot.y });
+  check('人类继续落子成功（不挑被占的点）', r2.ok, JSON.stringify(r2.reason));
   s = await waitAi();
   check('人类第二手后 AI 继续应手', s.game.moveCount >= beforeCount + 2, `${beforeCount} -> ${s.game.moveCount}`);
 
@@ -114,7 +127,7 @@ async function waitAi(timeoutMs = 60000) {
   const sgfRes = await fetch(BASE + '/api/sgf');
   const sgf = await sgfRes.text();
   check('SGF 以 (; 开头', sgf.startsWith('(;'), sgf.slice(0, 40));
-  check('SGF 含版本号', /AP\[[^\]]+:1\.0\.0\]/.test(sgf), sgf.slice(0, 90));
+  check('SGF 含版本号', /AP\[[^\]]+:\d+\.\d+\.\d+\]/.test(sgf), sgf.slice(0, 90));
   check('SGF 含棋盘大小', sgf.includes('SZ[19]'));
 
   // ---------------- 人人对战 + 数子
@@ -148,10 +161,34 @@ async function waitAi(timeoutMs = 60000) {
   check('给出结果文本', Boolean(r.game.result && r.game.result.text), r.game.result && r.game.result.text);
   console.log(`    结果: ${r.game.result.text}`);
 
+  // ---------------- 实体棋盘输入
+  console.log('\n实体棋盘输入（反向驱动）');
+  r = await call('/api/game/new', 'POST', { mode: 'pvp', boardSize: 9, komi: 7 });
+  check('为硬件输入测试新建对局', r.ok && r.game.moveCount === 0);
+
+  r = await call('/api/hardware/input', 'POST', { x: 2, y: 2 });
+  check('实体棋盘上报落子被接受', r.ok, JSON.stringify({ reason: r.reason, message: r.message }));
+  check('手数增加', r.game && r.game.moveCount === 1, String(r.game && r.game.moveCount));
+  check('落子来源标记为 hardware', r.lastMoveSource === 'hardware', String(r.lastMoveSource));
+  check('落的是黑棋、轮转给白', r.game.moveLog[0].color === 1 && r.game.turn === 2);
+
+  r = await call('/api/hardware/input', 'POST', { x: 2, y: 2 });
+  check('实体棋盘上报同一位置被拒绝', !r.ok && r.reason === 'occupied', JSON.stringify(r.reason));
+  check('给出中文提示', typeof r.message === 'string' && r.message.length > 0, r.message);
+  check('拒绝后棋盘未被改动', r.game.moveCount === 1);
+  check('拒绝原因同步到 lastError', typeof r.error === 'string' && r.error.includes('实体棋盘'), String(r.error));
+
+  r = await call('/api/hardware/input', 'POST', { x: 99, y: 99 });
+  check('实体棋盘上报越界坐标被拒绝', !r.ok, JSON.stringify(r.reason));
+
+  r = await call('/api/hardware/input', 'POST', { x: 5, y: 5 });
+  check('实体棋盘可以继续落白棋', r.ok && r.game.moveLog[1].color === 2, JSON.stringify(r.reason));
+
   // ---------------- 硬件接口
-  console.log('\n硬件接口');
+  console.log('\n硬件接口状态');
   const st = await call('/api/status');
   check('返回硬件状态', Boolean(st.hardware), JSON.stringify(st.hardware && st.hardware.driver));
+  check('返回最后一手来源', 'lastMoveSource' in st, JSON.stringify(st.lastMoveSource));
 
   console.log(`\n结果： ${passed} 通过, ${failed} 失败`);
   process.exit(failed === 0 ? 0 : 1);

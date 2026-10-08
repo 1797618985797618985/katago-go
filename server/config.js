@@ -5,6 +5,14 @@ const path = require('node:path');
 
 const ROOT = path.resolve(__dirname, '..');
 
+/**
+ * 配置文件位置。默认读项目根目录的 config.json；
+ * 用环境变量 CONFIG_FILE 可以指向别的文件，方便测试和多套部署配置共存。
+ */
+const CONFIG_FILE = process.env.CONFIG_FILE
+  ? path.resolve(process.env.CONFIG_FILE)
+  : path.join(ROOT, 'config.json');
+
 const DEFAULTS = {
   server: { port: 8080, host: '127.0.0.1' },
   katago: {
@@ -51,13 +59,12 @@ let cached = null;
 function loadConfig({ reload = false } = {}) {
   if (cached && !reload) return cached;
 
-  const file = path.join(ROOT, 'config.json');
   let user = {};
-  if (fs.existsSync(file)) {
+  if (fs.existsSync(CONFIG_FILE)) {
     try {
-      user = JSON.parse(fs.readFileSync(file, 'utf8'));
+      user = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
     } catch (err) {
-      console.warn(`[config] config.json 解析失败，使用默认配置: ${err.message}`);
+      console.warn(`[config] ${CONFIG_FILE} 解析失败，使用默认配置: ${err.message}`);
     }
   }
   const cfg = deepMerge(DEFAULTS, user);
@@ -107,6 +114,7 @@ function discoverModels() {
 
 module.exports = {
   ROOT,
+  CONFIG_FILE,
   DEFAULTS,
   loadConfig,
   resolvePath,

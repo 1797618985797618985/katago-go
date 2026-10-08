@@ -6,6 +6,9 @@
  *
  * 用法： node tools/mock-board.js [port]     默认 9100
  * 然后 config.json 里把 hardware.driver 设为 "tcp" 即可。
+ *
+ * 在终端里输入 "x y"（比如 "15 3"）回车，就会模拟玩家在实体棋盘上落子，
+ * 向程序上报 {"event":"button","x":15,"y":3}，用来验证反向链路。
  */
 
 const net = require('node:net');
@@ -13,9 +16,13 @@ const net = require('node:net');
 const port = Number(process.argv[2] || 9100);
 const t = () => new Date().toISOString().slice(11, 23);
 
+/** 当前连接的棋盘；只有一个控制器时用它来回发按键事件 */
+let currentSocket = null;
+
 const server = net.createServer((socket) => {
   const peer = `${socket.remoteAddress}:${socket.remotePort}`;
   console.log(`[${t()}] 控制器已连接: ${peer}`);
+  currentSocket = socket;
 
   socket.setEncoding('utf8');
   let buffer = '';
@@ -97,4 +104,27 @@ function ack(socket, id) {
 server.listen(port, '127.0.0.1', () => {
   console.log(`模拟棋盘控制器已启动: tcp://127.0.0.1:${port}`);
   console.log('把 config.json 的 hardware.driver 设为 "tcp" 即可接入。');
+  console.log('在下面输入 "x y" 回车，可以模拟玩家在实体棋盘上落子（例如 15 3）。');
+});
+
+// 从终端读取 "x y"，模拟实体棋盘的按键上报
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => {
+  for (const line of String(chunk).split(/\r?\n/)) {
+    const text = line.trim();
+    if (!text) continue;
+    const m = /^(\d{1,2})\s+(\d{1,2})$/.exec(text);
+    if (!m) {
+      console.log(`[${t()}] 用法：输入两个数字，例如 "15 3"`);
+      continue;
+    }
+    if (!currentSocket) {
+      console.log(`[${t()}] 程序还没连上来，无法上报`);
+      continue;
+    }
+    const x = Number(m[1]);
+    const y = Number(m[2]);
+    console.log(`[${t()}] 上报按键落子 (${x},${y})`);
+    currentSocket.write(`${JSON.stringify({ event: 'button', x, y })}\n`);
+  }
 });
