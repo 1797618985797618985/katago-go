@@ -53,7 +53,7 @@ async function waitAi(timeoutMs = 60000) {
   const status = await call('/api/status');
   check('服务可访问', Boolean(status.engine));
   check('返回版本号', Boolean(status.version), JSON.stringify(status.version));
-  check('返回难度列表', Array.isArray(status.levels) && status.levels.length === 39, `实际 ${status.levels && status.levels.length}`);
+  check('返回难度列表（中国段级位 33 档）', Array.isArray(status.levels) && status.levels.length === 33, `实际 ${status.levels && status.levels.length}`);
   check('引擎状态正常', ['ready', 'builtin'].includes(status.engine.status), status.engine.status);
   console.log(`    引擎: ${JSON.stringify(status.engine.backend)} ${status.engine.visitsPerSec} 访问/秒 可支持到 ${status.engine.recommendedMaxLevel}`);
 

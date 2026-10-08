@@ -25,3 +25,6 @@ jobs:
 
       - name: 规则引擎单元测试
         run: node tools/rules-test.js
+
+      - name: 内置引擎与难度曲线测试
+        run: node tools/engine-test.js
