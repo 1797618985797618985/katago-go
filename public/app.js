@@ -468,8 +468,6 @@ async function tryPlay(x, y) {
     if (!r.ok) {
       handleIllegal(r.message || '落子不合规', x, y);
     } else {
-      Sound.place();
-      if (g.mode === 'pve') setTimeout(() => Sound.ai(), 240);
       applyState(r);
     }
   } finally {
@@ -480,21 +478,57 @@ async function tryPlay(x, y) {
 // ---------------------------------------------------------------- 状态渲染
 
 function applyState(next) {
-  const prevMoveCount = state.game ? state.game.moveCount : 0;
-  const prevId = state.game ? state.game.id : null;
+  const prev = state.game;
+  const prevCount = prev ? prev.moveCount : -1;
+  const prevId = prev ? prev.id : null;
+  const prevStatus = prev ? prev.status : null;
+  const prevError = state.error;
+
   state = { ...state, ...next };
 
   const g = state.game;
-  if (g) {
-    if (g.id !== prevId) {
-      Board.setSize(g.boardSize);
-      ui.hintPoint = null;
-    }
+  if (g && g.id !== prevId) {
+    Board.setSize(g.boardSize);
+    ui.hintPoint = null;
   }
-  if (g && g.moveCount !== prevMoveCount) Board.draw();
-  else Board.draw();
+  Board.draw();
+
+  // 新落子的音效与提示。
+  // HTTP 响应和 SSE 推送都会走到这里，用 moveCount 判断是不是新的一手，
+  // 避免同一手棋被播放两次。
+  if (g && g.moveLog && g.moveLog.length && g.id === prevId && g.moveCount > prevCount) {
+    announceMove(g, state.lastMoveSource);
+  }
+
+  // 服务端侧的错误（典型场景：实体棋盘上下了违规的一手）
+  if (state.error && state.error !== prevError) {
+    Sound.illegal();
+    toast('操作被拒绝', state.error, 'error', 4200);
+  }
+
+  // 终局提示音
+  if (g && g.status === 'finished' && prevStatus !== 'finished') Sound.win();
 
   render();
+}
+
+/** 根据落子来源给出不同的音效与提示。 */
+function announceMove(g, source) {
+  const L = 'ABCDEFGHJKLMNOPQRSTUVWXYZ';
+  const last = g.moveLog[g.moveLog.length - 1];
+  const where = last.pass ? '停一手' : `${L[last.x]}${g.boardSize - last.y}`;
+  const who = last.color === 1 ? '黑' : '白';
+
+  if (source === 'hardware') {
+    Sound.place();
+    toast('实体棋盘落子', `第 ${last.no} 手 · ${who} ${where}`, 'info', 2600);
+  } else if (g.mode === 'pve' && last.color === g.aiColor) {
+    Sound.ai();
+  } else if (last.pass) {
+    Sound.info();
+  } else {
+    Sound.place();
+  }
 }
 
 function render() {
@@ -728,9 +762,7 @@ function bind() {
   $('#btn-pass').addEventListener('click', async () => {
     const r = await api('/api/game/pass', { method: 'POST' });
     if (r.ok) {
-      Sound.info();
       applyState(r);
-      if (state.game && state.game.mode === 'pve') setTimeout(() => Sound.ai(), 240);
     } else toast('无法停一手', r.message || '', 'warn');
   });
 
@@ -866,8 +898,6 @@ function bind() {
 
   window.addEventListener('resize', () => Board.resize());
 
-  // 实体棋盘按键 -> 落子
-  window.__hardwareInput = (pt) => tryPlay(pt.x, pt.y);
 }
 
 async function newGame() {
@@ -905,22 +935,8 @@ async function boot() {
   const es = new EventSource('/api/events');
   es.onmessage = (ev) => {
     try {
-      const data = JSON.parse(ev.data);
-      const before = state.game ? `${state.game.moveCount}:${state.game.status}:${state.game.id}` : '';
-      applyState(data);
-      const after = data.game ? `${data.game.moveCount}:${data.game.status}:${data.game.id}` : '';
-      if (before && before !== after && data.game && data.game.moveLog && data.game.moveLog.length) {
-        const last = data.game.moveLog[data.game.moveLog.length - 1];
-        // 电脑落子时给一声提示音
-        if (
-          data.game.mode === 'pve' &&
-          last.color === data.game.aiColor &&
-          !state.aiThinking &&
-          data.game.moveCount > 0
-        ) {
-          Sound.place();
-        }
-      }
+      // 音效与提示统一在 applyState 里处理，避免和 HTTP 响应重复播放
+      applyState(JSON.parse(ev.data));
     } catch {
       /* 忽略坏消息 */
     }

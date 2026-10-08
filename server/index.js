@@ -19,10 +19,28 @@ const PUBLIC_DIR = path.join(ROOT, 'public');
 const engine = new EngineManager();
 const hardware = new HardwareBridge({ config: cfg });
 
+/**
+ * 实体棋盘反向输入：控制器上报按键落子后，走和界面点击完全相同的逻辑。
+ * 这样一来，界面上不能下的棋（占位、劫、自杀、没轮到），实体棋盘上同样下不了，
+ * 并且会把提示音 / 弹窗推给界面。
+ */
+hardware.on('input', async (pt) => {
+  const r = await playHumanMove(pt.x, pt.y, 'hardware');
+  if (!r.ok) {
+    lastError = `实体棋盘落子被拒绝：${r.message}`;
+    broadcast();
+  }
+});
+
+// 控制器连接状态变化时同步给界面
+hardware.on('status', () => broadcast());
+
 /** 当前对局。本程序定位是"一台机器一盘棋"，所以只保留一个会话。 */
 let game = null;
 let aiThinking = false;
 let lastError = null;
+/** 最后一手的来源：ui（界面点击）| hardware（实体棋盘）| ai */
+let lastMoveSource = null;
 
 const sseClients = new Set();
 
@@ -107,6 +125,7 @@ function fullState() {
     version: VERSION,
     game: game ? game.toState() : null,
     aiThinking,
+    lastMoveSource,
     engine: engine.describe(),
     hardware: hardware.status(),
     levels: listLevels(),
@@ -165,6 +184,9 @@ async function maybeRunAi() {
       }
       if (game.status === 'scoring') await hardware.onSync(game);
     }
+    if (game.moveLog.length > 0 && game.moveLog[game.moveLog.length - 1].color === color) {
+      lastMoveSource = 'ai';
+    }
   } catch (err) {
     lastError = `AI 出子失败：${err.message}`;
     console.warn('[ai]', err);
@@ -176,6 +198,48 @@ async function maybeRunAi() {
 }
 
 // ---------------------------------------------------------------- 路由
+
+/**
+ * 统一的「人落子」入口。
+ *
+ * 界面点击、实体棋盘按键、HTTP 上报三条路径全都走这里，
+ * 保证回合校验、规则判定、硬件同步、AI 触发只有一份逻辑，
+ * 不会出现"界面上不能下的棋，实体棋盘上却能下"这种不一致。
+ *
+ * @param {number} x
+ * @param {number} y
+ * @param {'ui'|'hardware'} source 落子来源，会随状态推给前端
+ */
+async function playHumanMove(x, y, source = 'ui') {
+  if (!game) return { ok: false, reason: 'no-game', message: '还没有开始对局' };
+  if (game.status !== 'playing') {
+    return { ok: false, reason: 'not-playing', message: REASON_TEXT['not-playing'] };
+  }
+  if (game.mode === 'pve' && game.turn !== game.humanColor) {
+    return { ok: false, reason: 'wrong-turn', message: '现在是电脑思考中' };
+  }
+  if (!Number.isInteger(x) || !Number.isInteger(y)) {
+    return { ok: false, reason: 'bad-point', message: '落子点不合法' };
+  }
+
+  const r = game.play(x, y, game.turn);
+  if (!r.ok) {
+    return {
+      ok: false,
+      reason: r.reason,
+      x,
+      y,
+      message: REASON_TEXT[r.reason] || `不能落子（${r.reason}）`,
+    };
+  }
+
+  lastMoveSource = source;
+  const move = game.moveLog[game.moveLog.length - 1];
+  await hardware.onMove(game, move, (r.captured || []).map((i) => rules.xyOf(game.boardSize, i)));
+  broadcast();
+  maybeRunAi();
+  return { ok: true, captured: r.captured, source };
+}
 
 async function handleApi(req, res, url) {
   const p = url.pathname;
@@ -226,31 +290,38 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { ok: true, ...fullState() });
   }
 
+  /**
+   * 硬件相关路由要放在"必须先开局"的判断之前 ——
+   * 否则还没开局时连"测试连接""复位棋盘"都用不了。
+   */
+  if (p === '/api/hardware/test' && method === 'POST') {
+    await hardware.send({ cmd: 'ping' });
+    return sendJson(res, 200, { ok: true, ...fullState() });
+  }
+
+  if (p === '/api/hardware/reset' && method === 'POST') {
+    await hardware.send({
+      cmd: 'reset',
+      size: game ? game.boardSize : cfg.defaults.boardSize || 19,
+      komi: game ? game.komi : cfg.defaults.komi,
+    });
+    return sendJson(res, 200, { ok: true, ...fullState() });
+  }
+
+  // 实体棋盘落子的 HTTP 入口：控制器不方便走 TCP/stdio 时可以直接 POST 到这里
+  if (p === '/api/hardware/input' && method === 'POST') {
+    const body = await readBody(req);
+    const result = await playHumanMove(Number(body.x), Number(body.y), 'hardware');
+    if (!result.ok) lastError = `实体棋盘落子被拒绝：${result.message}`;
+    return sendJson(res, 200, { ...result, ...fullState() });
+  }
+
   if (!game) return sendJson(res, 400, { ok: false, message: '还没有开始对局' });
 
   if (p === '/api/game/move' && method === 'POST') {
     const body = await readBody(req);
-    if (game.status !== 'playing') {
-      return sendJson(res, 200, { ok: false, reason: 'not-playing', message: REASON_TEXT['not-playing'], ...fullState() });
-    }
-    if (game.mode === 'pve' && game.turn !== game.humanColor) {
-      return sendJson(res, 200, { ok: false, reason: 'wrong-turn', message: '现在是电脑思考中', ...fullState() });
-    }
-    const x = Number(body.x);
-    const y = Number(body.y);
-    if (!Number.isInteger(x) || !Number.isInteger(y)) {
-      return sendJson(res, 200, { ok: false, reason: 'bad-point', message: '落子点不合法', ...fullState() });
-    }
-    const r = game.play(x, y, game.turn);
-    if (!r.ok) {
-      const message = REASON_TEXT[r.reason] || `不能落子（${r.reason}）`;
-      return sendJson(res, 200, { ok: false, reason: r.reason, x, y, message, ...fullState() });
-    }
-    const move = game.moveLog[game.moveLog.length - 1];
-    await hardware.onMove(game, move, (r.captured || []).map((i) => rules.xyOf(game.boardSize, i)));
-    broadcast();
-    maybeRunAi();
-    return sendJson(res, 200, { ok: true, captured: r.captured, ...fullState() });
+    const result = await playHumanMove(Number(body.x), Number(body.y), 'ui');
+    return sendJson(res, 200, { ...result, ...fullState() });
   }
 
   if (p === '/api/game/pass' && method === 'POST') {
@@ -331,16 +402,6 @@ async function handleApi(req, res, url) {
       'Content-Disposition': `attachment; filename="game-${Date.now()}.sgf"`,
     });
     return res.end(sgf);
-  }
-
-  if (p === '/api/hardware/test' && method === 'POST') {
-    await hardware.send({ cmd: 'ping' });
-    return sendJson(res, 200, { ok: true, hardware: hardware.status() });
-  }
-
-  if (p === '/api/hardware/reset' && method === 'POST') {
-    await hardware.send({ cmd: 'reset', size: game ? game.boardSize : 19, komi: game ? game.komi : 7.5 });
-    return sendJson(res, 200, { ok: true, hardware: hardware.status() });
   }
 
   return sendJson(res, 404, { ok: false, message: '未知接口' });

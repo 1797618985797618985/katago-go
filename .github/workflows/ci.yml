@@ -28,3 +28,6 @@ jobs:
 
       - name: 内置引擎与难度曲线测试
         run: node tools/engine-test.js
+
+      - name: 实体棋盘回路测试
+        run: node tools/hardware-loop-test.js
