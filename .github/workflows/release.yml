@@ -29,6 +29,7 @@ jobs:
 
       - name: 离线测试（规则引擎 / 内置引擎 / 难度曲线）
         run: |
+          node tools/check-version.js
           node tools/rules-test.js
           node tools/engine-test.js
 

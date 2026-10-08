@@ -23,6 +23,9 @@ jobs:
             node --check "$f"
           done
 
+      - name: 版本号一致性（package.json / README / CHANGELOG）
+        run: node tools/check-version.js
+
       - name: 规则引擎单元测试
         run: node tools/rules-test.js
 

@@ -9,7 +9,7 @@
 
 它是独立的窗口程序，不需要开浏览器，也不需要另外启动服务端。打包之后就是一个 exe。
 
-当前版本 1.1.0。
+当前版本 1.2.0。
 
 ![界面](docs/screenshot.png)
 
@@ -218,6 +218,7 @@ docs/                 硬件协议
 ## 测试
 
 ```bash
+node tools/check-version.js  # 版本号一致性：package.json / README / CHANGELOG
 node tools/rules-test.js     # 规则引擎，93 项：提子 / 自杀 / 劫 / 禁全同 / 让子 / 悔棋 /
                              #   数子 / 计时读秒 / SGF 导入导出
 node tools/engine-test.js    # 内置引擎与难度曲线，18 项，不需要 KataGo
@@ -225,7 +226,7 @@ node tools/gtp-smoke.js      # 引擎自检，需要先下好模型：拉进程�
 node tools/api-test.js       # 接口测试，需要先 npm run server
 ```
 
-规则和内置引擎两个不依赖 KataGo，CI 里跑的就是它们。
+前三个都不依赖 KataGo，CI 里跑的就是它们（发版流程里也会先跑一遍）。
 
 ## 还没做的
 
