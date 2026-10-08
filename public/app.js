@@ -643,7 +643,7 @@ function buildLevelSelect() {
   sel.innerHTML = '';
   const groups = {};
   for (const lv of state.levels) {
-    const gname = lv.group;
+    const gname = lv.groupLabel || lv.group;
     if (!groups[gname]) {
       groups[gname] = document.createElement('optgroup');
       groups[gname].label = gname;
