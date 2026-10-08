@@ -82,6 +82,8 @@ const ui = {
   evalOn: false,
   evalPly: -1,
   evalAt: 0,
+  /** 上次用来刷新难度文案的引擎能力值，变了才重刷 */
+  levelCap: undefined,
 };
 
 let state = { game: null, engine: null, hardware: null, levels: [], aiThinking: false };
@@ -554,7 +556,10 @@ function render() {
   if (e.status === 'ready') {
     els.engineLine.textContent = `${e.backend ? e.backend.label : ''} · ${e.modelKind === 'fast' ? '轻量权重' : '主权重'} · ${e.visitsPerSec} 次访问/秒 · 可支持到 ${e.recommendedMaxLevel}`;
   } else if (e.status === 'loading' || e.status === 'probing') {
-    els.engineLine.textContent = '引擎初始化中（首次运行需要做一次 GPU 内核调优，可能要几分钟）…';
+    const secs = e.loadingSeconds ? `，已等待 ${e.loadingSeconds} 秒` : '';
+    els.engineLine.textContent = e.tuning
+      ? `正在对显卡做一次性内核调优（只需一次，可能几分钟${secs}）…`
+      : `引擎加载中${secs}…`;
   } else if (e.status === 'builtin') {
     els.engineLine.textContent = `内置引擎（${e.note || '未检测到 KataGo'}）`;
   } else {
@@ -562,7 +567,15 @@ function render() {
   }
 
   // 难度下拉
-  if (state.levels && state.levels.length && els.levelSelect.options.length !== state.levels.length) {
+  // 引擎能力是异步测出来的，要等它出来之后再刷一次下拉框文案，
+  // 否则会拿初始值（0）去判断，把几乎所有难度都标成"性能受限"
+  const levelCap = state.engine ? state.engine.maxLevelIndex : null;
+  if (
+    state.levels &&
+    state.levels.length &&
+    (els.levelSelect.options.length !== state.levels.length || ui.levelCap !== levelCap)
+  ) {
+    ui.levelCap = levelCap;
     buildLevelSelect();
   }
   updateLevelHint();

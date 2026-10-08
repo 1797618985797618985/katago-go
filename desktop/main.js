@@ -99,6 +99,23 @@ async function captureAndExit(url) {
   } catch {
     /* 界面还没准备好就跳过 */
   }
+
+  // 顺手做一个界面自检：难度下拉里的"性能受限"标记应该和顶栏说的一致
+  try {
+    const info = await mainWindow.webContents.executeJavaScript(`(() => {
+      const opts = [...document.querySelectorAll('#level-select option')];
+      return {
+        levels: opts.length,
+        limited: opts.filter((o) => o.textContent.includes('⚠')).length,
+        engineLine: document.getElementById('engine-line').textContent.trim(),
+      };
+    })()`);
+    console.log(`[截图] 难度档位 ${info.levels} 个，标注"性能受限"的 ${info.limited} 个`);
+    console.log(`[截图] 顶栏：${info.engineLine}`);
+  } catch (err) {
+    console.warn('[截图] 界面自检失败:', err.message);
+  }
+
   const image = await mainWindow.webContents.capturePage();
   fs.mkdirSync(path.dirname(shotPath), { recursive: true });
   fs.writeFileSync(shotPath, image.toPNG());

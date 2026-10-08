@@ -127,6 +127,12 @@ class KataGoEngine {
 
     this.client = new GtpClient({ command: this.exe, args, cwd: cfgDir });
     this.client.on('log', (line) => {
+      // 首次跑 OpenCL 会做一次 GPU 内核调优，这段时间特别长，
+      // 记下来好让界面能说得具体一点，而不是笼统的"初始化中"
+      if (/autotuning|GPU tuning|Tuning \d+\//i.test(line)) {
+        this.info.tuning = true;
+        this.info.tuningNote = line.trim().slice(0, 120);
+      }
       if (process.env.KATAGO_VERBOSE) console.log(`[katago:${this.label}] ${line}`);
     });
     this.client.start();
@@ -135,6 +141,8 @@ class KataGoEngine {
     this.info.name = await this.client.send('name', 600000);
     this.info.version = await this.client.send('version', 600000);
     this.info.humanSL = Boolean(this.humanModel);
+    // 能应答 name 就说明模型加载与调优都结束了
+    this.info.tuning = false;
     try {
       await this.client.send('kata-set-param logSearchInfo false', 10000);
     } catch {
