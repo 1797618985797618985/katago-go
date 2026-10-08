@@ -57,7 +57,8 @@ function Invoke-GitHubApi {
         [string]$Method = 'GET',
         [string]$Path,
         $Body,
-        [switch]$AllowFailure
+        [switch]$AllowFailure,
+        [int]$Retries = 3
     )
     $headers = @{
         Authorization          = "token $script:Token"
@@ -71,14 +72,23 @@ function Invoke-GitHubApi {
         $params.Body = ($Body | ConvertTo-Json -Depth 8 -Compress)
         $params.ContentType = 'application/json'
     }
-    try {
-        return Invoke-RestMethod @params
-    } catch {
-        if ($AllowFailure) { return $null }
-        $detail = ''
-        if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $detail = $_.ErrorDetails.Message }
-        throw "GitHub API $Method $Path 失败: $($_.Exception.Message) $detail"
+    $lastErr = $null
+    for ($attempt = 1; $attempt -le $Retries; $attempt++) {
+        try {
+            return Invoke-RestMethod @params
+        } catch {
+            $lastErr = $_
+            $status = 0
+            try { $status = [int]$_.Exception.Response.StatusCode } catch { }
+            # 5xx / 网络抖动值得重试；4xx 直接放弃
+            if ($status -ge 400 -and $status -lt 500) { break }
+            if ($attempt -lt $Retries) { Start-Sleep -Milliseconds (400 * $attempt) }
+        }
     }
+    if ($AllowFailure) { return $null }
+    $detail = ''
+    if ($lastErr.ErrorDetails -and $lastErr.ErrorDetails.Message) { $detail = $lastErr.ErrorDetails.Message }
+    throw "GitHub API $Method $Path 失败: $($lastErr.Exception.Message) $detail"
 }
 
 $script:User = Invoke-GitHubApi -Path '/user'
