@@ -210,6 +210,48 @@ async function maybeAutoDead() {
 
 // ---------------------------------------------------------------- 路由
 
+/** 胜率曲线的后台作业状态 */
+let curveJob = null;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function curveStatus() {
+  if (!curveJob) return { running: false, done: 0, total: 0, points: [], error: null, gameId: null };
+  // 对局换了的话，曲线就作废
+  if (game && curveJob.gameId !== game.id) {
+    return { running: false, done: 0, total: 0, points: [], error: null, gameId: null };
+  }
+  return {
+    running: curveJob.running,
+    done: curveJob.done,
+    total: curveJob.total,
+    points: curveJob.points,
+    error: curveJob.error,
+    gameId: curveJob.gameId,
+  };
+}
+
+/** 逐手分析，产出胜率曲线。跑的时候会让着电脑思考，避免抢引擎。 */
+async function runCurveJob(job) {
+  for (let ply = 0; ply <= job.total; ply++) {
+    if (curveJob !== job || job.cancelled) return;
+    if (!game || game.id !== job.gameId) {
+      job.error = '对局已经换过了';
+      break;
+    }
+    while (aiThinking && curveJob === job && !job.cancelled) await sleep(250);
+    if (curveJob !== job || job.cancelled) return;
+
+    // 整盘分析点多，单点给的时间短一些，整体才跑得完
+    const r = await engine.analyzeAt(game, ply, { visits: job.visits, maxMs: 1500, intervalMs: 60 });
+    if (r) job.points.push({ ply, winrate: r.winrate, scoreLead: r.scoreLead, turn: r.turn });
+    else job.failed = (job.failed || 0) + 1;
+    job.done = ply + 1;
+    broadcast();
+  }
+  job.running = false;
+  broadcast();
+}
+
 async function handleApi(req, res, url) {
   const p = url.pathname;
   const method = req.method;
@@ -233,6 +275,66 @@ async function handleApi(req, res, url) {
 
   if (p === '/api/status' && method === 'GET') {
     return sendJson(res, 200, fullState());
+  }
+
+  /**
+   * 形势判断：分析第 ply 手之后的局面（不写 ply 就是当前局面）。
+   * 返回的胜率与目差都统一成黑棋视角，界面不用再换算。
+   */
+  if (p === '/api/analysis' && method === 'GET') {
+    if (!game) return sendJson(res, 200, { ok: false, message: '还没有开始对局' });
+    const plyParam = url.searchParams.get('ply');
+    const visits = Math.max(20, Math.min(2000, Number(url.searchParams.get('visits')) || 120));
+    const target =
+      plyParam == null ? game.moveLog.length : Math.max(0, Math.min(Number(plyParam) || 0, game.moveLog.length));
+
+    const a = await engine.analyzeAt(game, target, { visits, maxMs: 5000 });
+    if (!a) {
+      return sendJson(res, 200, { ok: false, reason: 'no-engine', message: '形势判断需要 KataGo 引擎' });
+    }
+    // 把推荐点转成内部坐标，界面可以直接在棋盘上画标记
+    a.moves = a.moves.map((m) => {
+      const pt = rules.fromGtp(game.boardSize, m.move);
+      return { ...m, x: pt ? pt.x : null, y: pt ? pt.y : null };
+    });
+    return sendJson(res, 200, { ok: true, analysis: a });
+  }
+
+  /** 复盘用：开一个逐手分析的作业，产出胜率曲线 */
+  if (p === '/api/analysis/curve' && method === 'POST') {
+    if (!game) return sendJson(res, 200, { ok: false, message: '还没有开始对局' });
+    if (game.moveLog.length === 0) return sendJson(res, 200, { ok: false, message: '这盘还没有落子' });
+
+    const body = await readBody(req);
+    const visits = Math.max(10, Math.min(600, Number(body.visits) || 40));
+    curveJob = {
+      gameId: game.id,
+      total: game.moveLog.length,
+      done: 0,
+      visits,
+      points: [],
+      running: true,
+      cancelled: false,
+      error: null,
+    };
+    const job = curveJob;
+    runCurveJob(job).catch((err) => {
+      job.running = false;
+      job.error = err.message;
+    });
+    return sendJson(res, 200, { ok: true, curve: curveStatus() });
+  }
+
+  if (p === '/api/analysis/curve' && method === 'GET') {
+    return sendJson(res, 200, { ok: true, curve: curveStatus() });
+  }
+
+  if (p === '/api/analysis/curve' && method === 'DELETE') {
+    if (curveJob) {
+      curveJob.cancelled = true;
+      curveJob.running = false;
+    }
+    return sendJson(res, 200, { ok: true, curve: curveStatus() });
   }
 
   if (p === '/api/game/new' && method === 'POST') {

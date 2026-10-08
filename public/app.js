@@ -57,6 +57,16 @@ const els = {
   btnReviewLast: $('#btn-review-last'),
   btnReviewLive: $('#btn-review-live'),
   sgfFile: $('#sgf-file'),
+  evalToggle: $('#eval-toggle'),
+  evalPanel: $('#eval-panel'),
+  wrBlack: $('#wr-black'),
+  wrWhite: $('#wr-white'),
+  wrText: $('#wr-text'),
+  evalDetail: $('#eval-detail'),
+  evalMoves: $('#eval-moves'),
+  curve: $('#curve'),
+  curveHint: $('#curve-hint'),
+  btnAnalyzeAll: $('#btn-analyze-all'),
 };
 
 const ui = {
@@ -68,9 +78,18 @@ const ui = {
   sending: false,
   /** 复盘：null = 看当前局面；否则是 {ply, cells, lastMove, turn, ...} */
   review: null,
+  /** 形势判断开关 */
+  evalOn: false,
+  evalPly: -1,
+  evalAt: 0,
 };
 
 let state = { game: null, engine: null, hardware: null, levels: [], aiThinking: false };
+
+/** 形势判断与胜率曲线的运行时数据 */
+let evalData = null;
+let evalBusy = false;
+let curveData = null;
 
 // ---------------------------------------------------------------- 音效
 
@@ -622,6 +641,9 @@ function render() {
   renderMoveList(g);
   updateMoveHighlight();
   renderReviewBar(g);
+  renderEval();
+  renderCurveHint();
+  drawCurve();
 
   // 硬件
   const hw = state.hardware;
@@ -765,6 +787,168 @@ function updateLevelHint() {
 // ---------------------------------------------------------------- 交互
 
 // ---------------------------------------------------------------- 复盘
+
+// ---------------------------------------------------------------- 形势判断
+
+/** 当前正在看的第几手（复盘时是复盘位置，否则是当前局面） */
+function currentPly() {
+  const g = state.game;
+  if (!g) return 0;
+  return ui.review ? ui.review.ply : g.moveCount;
+}
+
+const pct = (v) => `${(v * 100).toFixed(1)}%`;
+
+async function refreshEval(force = false) {
+  if (!ui.evalOn || evalBusy || !state.game) return;
+  if (state.aiThinking && !force) return;
+  const ply = currentPly();
+  if (!force && ui.evalPly === ply && Date.now() - ui.evalAt < 2000) return;
+
+  evalBusy = true;
+  try {
+    const r = await api(`/api/analysis?ply=${ply}&visits=200`);
+    if (r.ok) {
+      evalData = r.analysis;
+      ui.evalPly = ply;
+      ui.evalAt = Date.now();
+      renderEval();
+    } else {
+      evalData = null;
+      els.evalDetail.textContent = r.message || '暂时拿不到形势判断';
+    }
+  } catch (err) {
+    els.evalDetail.textContent = `分析失败：${err.message}`;
+  } finally {
+    evalBusy = false;
+  }
+}
+
+function renderEval() {
+  els.evalPanel.hidden = !ui.evalOn;
+  if (!ui.evalOn) return;
+  if (!evalData) {
+    els.evalDetail.textContent = '等待分析…';
+    return;
+  }
+  const w = Math.max(0, Math.min(1, evalData.winrate));
+  els.wrBlack.style.width = `${(w * 100).toFixed(1)}%`;
+  els.wrWhite.style.width = `${((1 - w) * 100).toFixed(1)}%`;
+  els.wrText.textContent = `黑 ${pct(w)}　白 ${pct(1 - w)}`;
+
+  const lead = evalData.scoreLead;
+  const side = lead >= 0 ? '黑' : '白';
+  els.evalDetail.textContent = `第 ${evalData.ply} 手 · ${side}领先 ${Math.abs(lead).toFixed(1)} 目 · ${evalData.visits} 次访问`;
+
+  const L = 'ABCDEFGHJKLMNOPQRSTUVWXYZ';
+  els.evalMoves.innerHTML = '';
+  for (const m of (evalData.moves || []).slice(0, 4)) {
+    const li = document.createElement('li');
+    const coord = m.x != null ? `${L[m.x]}${state.game.boardSize - m.y}` : m.move;
+    li.innerHTML = `<b>${coord}</b><span>${pct(m.winrate)}</span><span class="pv"></span>`;
+    li.querySelector('.pv').textContent = (m.pv || []).slice(1, 8).join(' ');
+    li.dataset.x = m.x;
+    li.dataset.y = m.y;
+    li.title = '点一下在棋盘上标出这个点';
+    els.evalMoves.appendChild(li);
+  }
+}
+
+// ---------------------------------------------------------------- 胜率曲线
+
+function drawCurve() {
+  const cv = els.curve;
+  const c2 = cv.getContext('2d');
+  const W = cv.width;
+  const H = cv.height;
+  c2.clearRect(0, 0, W, H);
+
+  const pts = curveData && curveData.points ? curveData.points : [];
+  const total = curveData ? curveData.total : 0;
+
+  // 中线是五五开，上半偏黑、下半偏白
+  c2.fillStyle = 'rgba(255,255,255,0.06)';
+  c2.fillRect(0, 0, W, H / 2);
+  c2.strokeStyle = 'rgba(255,255,255,0.18)';
+  c2.lineWidth = 1;
+  c2.beginPath();
+  c2.moveTo(0, H / 2);
+  c2.lineTo(W, H / 2);
+  c2.stroke();
+
+  if (pts.length === 0) return;
+
+  const xOf = (ply) => (total > 0 ? (ply / total) * (W - 2) + 1 : 1);
+  const yOf = (wr) => H - wr * H;
+
+  c2.beginPath();
+  c2.moveTo(xOf(pts[0].ply), H / 2);
+  for (const p of pts) c2.lineTo(xOf(p.ply), yOf(p.winrate));
+  c2.lineTo(xOf(pts[pts.length - 1].ply), H / 2);
+  c2.closePath();
+  c2.fillStyle = 'rgba(76,154,255,0.22)';
+  c2.fill();
+
+  c2.beginPath();
+  pts.forEach((p, i) => (i ? c2.lineTo(xOf(p.ply), yOf(p.winrate)) : c2.moveTo(xOf(p.ply), yOf(p.winrate))));
+  c2.strokeStyle = '#4c9aff';
+  c2.lineWidth = 1.8;
+  c2.stroke();
+
+  const cur = currentPly();
+  if (cur <= total) {
+    c2.strokeStyle = 'rgba(255,200,87,0.9)';
+    c2.lineWidth = 1.5;
+    c2.beginPath();
+    c2.moveTo(xOf(cur), 0);
+    c2.lineTo(xOf(cur), H);
+    c2.stroke();
+  }
+}
+
+async function pollCurve() {
+  const r = await api('/api/analysis/curve');
+  if (!r.ok) return;
+  const c = r.curve;
+  const changed = !curveData || c.points.length !== curveData.points.length || c.running !== curveData.running;
+  curveData = c;
+  if (changed) {
+    drawCurve();
+    renderCurveHint();
+  }
+  if (c.running) setTimeout(pollCurve, 1200);
+}
+
+function renderCurveHint() {
+  const c = curveData;
+  const canAnalyze = state.game && state.game.canReview && state.game.moveCount > 0;
+  els.btnAnalyzeAll.disabled = !canAnalyze || Boolean(c && c.running);
+
+  if (!canAnalyze) {
+    els.curveHint.textContent =
+      state.game && state.game.moveCount > 0 ? '对局结束后可以逐手分析，画出胜率曲线' : '还没有落子';
+  } else if (c && c.running) {
+    els.curveHint.textContent = `正在分析… ${c.done} / ${c.total + 1}`;
+  } else if (c && c.error) {
+    els.curveHint.textContent = `分析中断：${c.error}`;
+  } else if (c && c.points && c.points.length) {
+    els.curveHint.textContent = `已分析 ${c.points.length} 个局面，点曲线可以跳到对应手数`;
+  } else {
+    els.curveHint.textContent = '点「分析整盘」逐手分析，画出胜率曲线';
+  }
+}
+
+async function startCurve() {
+  els.curveHint.textContent = '正在开始分析…';
+  const r = await api('/api/analysis/curve', { method: 'POST', body: { visits: 40 } });
+  if (!r.ok) {
+    toast('无法开始分析', r.message || '', 'warn');
+    return;
+  }
+  curveData = r.curve;
+  renderCurveHint();
+  pollCurve();
+}
 
 /** 跳到"下完第 ply 手"之后的局面。ply 等于总手数就是回到当前。 */
 async function gotoPly(ply) {
@@ -916,6 +1100,39 @@ function bind() {
 
   // 复盘控制
   els.btnReviewFirst.addEventListener('click', () => gotoPly(0));
+
+  // 形势判断
+  els.evalToggle.addEventListener('change', () => {
+    ui.evalOn = els.evalToggle.checked;
+    els.evalPanel.hidden = !ui.evalOn;
+    if (ui.evalOn) {
+      evalData = null;
+      refreshEval(true);
+    }
+  });
+
+  els.evalMoves.addEventListener('click', (ev) => {
+    const li = ev.target.closest('li[data-x]');
+    if (!li) return;
+    const x = Number(li.dataset.x);
+    const y = Number(li.dataset.y);
+    if (!Number.isInteger(x) || x < 0 || !Number.isInteger(y) || y < 0) return;
+    ui.hintPoint = { x, y };
+    Board.draw();
+    setTimeout(() => {
+      ui.hintPoint = null;
+      Board.draw();
+    }, 4000);
+  });
+
+  // 胜率曲线
+  els.btnAnalyzeAll.addEventListener('click', startCurve);
+  els.curve.addEventListener('click', (ev) => {
+    if (!curveData || !curveData.total) return;
+    const rect = els.curve.getBoundingClientRect();
+    const ratio = (ev.clientX - rect.left) / rect.width;
+    gotoPly(Math.round(ratio * curveData.total));
+  });
   els.btnReviewPrev.addEventListener('click', () => {
     const cur = ui.review ? ui.review.ply : (state.game ? state.game.moveCount : 0);
     gotoPly(cur - 1);
@@ -1117,6 +1334,16 @@ async function boot() {
   bind();
   Board.setSize(19);
   Board.resize();
+
+  // 形势判断开着的时候，定时刷新当前看的那一手
+  setInterval(() => refreshEval(), 2500);
+
+  // 给截图工具留的钩子：鼠标悬停会有半透明棋子，截图时先清掉
+  window.__clearHover = () => {
+    ui.hover = null;
+    document.body.style.cursor = 'default';
+    Board.draw();
+  };
 
   const res = await api('/api/status');
   applyState(res);
