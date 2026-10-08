@@ -17,11 +17,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/1797618985797618985/katago-go.git"
+    "url": "git+https://github.com/MocunPrime/katago-go.git"
   },
-  "homepage": "https://github.com/1797618985797618985/katago-go#readme",
+  "homepage": "https://github.com/MocunPrime/katago-go#readme",
   "bugs": {
-    "url": "https://github.com/1797618985797618985/katago-go/issues"
+    "url": "https://github.com/MocunPrime/katago-go/issues"
   },
   "main": "server/index.js",
   "scripts": {
