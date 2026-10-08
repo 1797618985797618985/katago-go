@@ -1,0 +1,63 @@
+name: Build Windows exe
+
+# 发布 Release 时自动把程序打包成一个 exe 并挂到 Release 上。
+# 引擎和权重体积大（约 250MB），不在版本库里，由构建脚本现场下载。
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows-exe:
+    name: 打包 Windows 单文件 exe
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 离线测试（规则引擎 / 内置引擎 / 难度曲线）
+        run: |
+          node tools/rules-test.js
+          node tools/engine-test.js
+
+      - name: 下载 KataGo 引擎与成品权重
+        shell: pwsh
+        run: pwsh -NoProfile -File tools/fetch-engine.ps1
+
+      - name: 打包成单个 exe
+        run: npm run build:portable
+
+      - name: 看看产物多大
+        shell: pwsh
+        run: |
+          Get-ChildItem dist -Filter *.exe |
+            Select-Object Name, @{ n = 'MB'; e = { [math]::Round($_.Length / 1MB, 1) } }
+
+      - name: 留存构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: katago-go-windows-exe
+          path: dist/*.exe
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: 挂到 Release 页面
+        if: github.event_name == 'release'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $exe = (Get-Item dist/*.exe).FullName
+          gh release upload "${{ github.event.release.tag_name }}" $exe --clobber

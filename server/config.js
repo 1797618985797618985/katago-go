@@ -3,7 +3,27 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const ROOT = path.resolve(__dirname, '..');
+/** 代码和前端资源所在目录。打包后它在 app.asar 里，只读。 */
+const APP_DIR = path.resolve(__dirname, '..');
+
+/**
+ * 资源根目录：引擎、权重放在这里。
+ * 开发时就是项目根目录；打包后由桌面外壳设成 resources 目录
+ * （引擎体积太大，不能塞进 asar，得放在外面）。
+ */
+function appRoot() {
+  return process.env.APP_ROOT ? path.resolve(process.env.APP_ROOT) : APP_DIR;
+}
+
+/**
+ * 可写数据目录：config.json、日志、联调记录写这里。
+ * 打包后指向系统的用户数据目录（asar 里是写不了的），开发时就用项目根目录。
+ */
+function dataDir() {
+  return process.env.APP_DATA ? path.resolve(process.env.APP_DATA) : appRoot();
+}
+
+const ROOT = appRoot();
 
 const DEFAULTS = {
   server: { port: 8080, host: '127.0.0.1' },
@@ -51,17 +71,19 @@ let cached = null;
 function loadConfig({ reload = false } = {}) {
   if (cached && !reload) return cached;
 
-  const file = path.join(ROOT, 'config.json');
+  // 配置文件放在可写目录里（打包后 asar 是只读的）
+  const file = process.env.CONFIG_FILE ? path.resolve(process.env.CONFIG_FILE) : path.join(dataDir(), 'config.json');
   let user = {};
   if (fs.existsSync(file)) {
     try {
       user = JSON.parse(fs.readFileSync(file, 'utf8'));
     } catch (err) {
-      console.warn(`[config] config.json 解析失败，使用默认配置: ${err.message}`);
+      console.warn(`[config] ${file} 解析失败，使用默认配置: ${err.message}`);
     }
   }
   const cfg = deepMerge(DEFAULTS, user);
   cfg.root = ROOT;
+  cfg.dataDir = dataDir();
   // 允许用环境变量临时覆盖端口/监听地址（部署时很方便）
   if (process.env.PORT) cfg.server.port = Number(process.env.PORT);
   if (process.env.HOST) cfg.server.host = process.env.HOST;
@@ -69,10 +91,16 @@ function loadConfig({ reload = false } = {}) {
   return cfg;
 }
 
-/** 相对路径统一按项目根目录解析。 */
+/** 相对路径按资源根目录解析（引擎、权重都在这下面）。 */
 function resolvePath(p) {
   if (!p) return '';
   return path.isAbsolute(p) ? p : path.join(ROOT, p);
+}
+
+/** 需要写入的文件（日志等）走可写目录。 */
+function resolveDataPath(p) {
+  if (!p) return '';
+  return path.isAbsolute(p) ? p : path.join(dataDir(), p);
 }
 
 function listFiles(dir, filter) {
@@ -89,7 +117,15 @@ function listFiles(dir, filter) {
  * 主权重取体积最大的那份，人类风格权重按文件名识别，轻量权重取最小的一份。
  */
 function discoverModels() {
-  const files = listFiles('engine/models', (n) => /\.(bin|txt)\.gz$/i.test(n));
+  // 资源目录和用户数据目录都找一遍，方便用户自己往数据目录里放权重
+  const files = [
+    ...listFiles('engine/models', (n) => /\.(bin|txt)\.gz$/i.test(n)),
+    ...(() => {
+      const dir = resolveDataPath('engine/models');
+      if (!fs.existsSync(dir) || dir === resolvePath('engine/models')) return [];
+      return fs.readdirSync(dir).filter((n) => /\.(bin|txt)\.gz$/i.test(n)).map((n) => path.join(dir, n));
+    })(),
+  ];
   const bySize = files
     .map((f) => ({ path: f, size: fs.statSync(f).size }))
     .sort((a, b) => b.size - a.size);
@@ -107,9 +143,13 @@ function discoverModels() {
 
 module.exports = {
   ROOT,
+  APP_DIR,
+  appRoot,
+  dataDir,
   DEFAULTS,
   loadConfig,
   resolvePath,
+  resolveDataPath,
   discoverModels,
   listFiles,
   deepMerge,

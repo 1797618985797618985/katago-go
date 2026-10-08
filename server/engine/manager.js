@@ -188,10 +188,14 @@ class EngineManager {
     return params.curve <= maxIdx;
   }
 
-  async genmove(game, color, levelId) {
+  async genmove(game, color, levelId, options = {}) {
     return this._enqueue(async () => {
       const level = findLevel(levelId);
-      const params = paramsForLevel(level ? level.id : '10k');
+      let params = paramsForLevel(level ? level.id : '10k');
+      // 有棋钟时把思考时间压到剩余时间以内
+      if (options.maxTimeCap != null) {
+        params = { ...params, maxTime: Math.max(0.3, Math.min(params.maxTime, options.maxTimeCap)) };
+      }
 
       if (this.main && this.main.running) {
         const useHuman = this._shouldUseHuman(params);
@@ -239,6 +243,32 @@ class EngineManager {
       }
       const params = paramsForLevel('1k');
       return { ...(await this.builtin.genmove(game, color, params)), engine: 'builtin' };
+    });
+  }
+
+  /**
+   * 自动判断死子（终局数子用）。
+   *
+   * 走的是 KataGo 的 final_status_list，由引擎按死活搜索来判断，
+   * 比让用户一个个点棋块准确得多。没有 KataGo 时返回 null，
+   * 界面会提示改用手动标记。
+   */
+  async autoDead(game) {
+    return this._enqueue(async () => {
+      if (!this.main || !this.main.running) return null;
+      try {
+        const dead = await this.main.finalStatusDead(game);
+        let score = null;
+        try {
+          score = await this.main.finalScore(game);
+        } catch {
+          /* 部分版本可能没有 final_score，不影响死子判定 */
+        }
+        return { dead, score, engine: 'katago' };
+      } catch (err) {
+        console.warn(`[engine] 自动判定死子失败: ${err.message}`);
+        return null;
+      }
     });
   }
 

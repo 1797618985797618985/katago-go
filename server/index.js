@@ -5,16 +5,18 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { URL } = require('node:url');
 
-const { loadConfig, ROOT } = require('./config');
+const { loadConfig, ROOT, APP_DIR } = require('./config');
 const { VERSION } = require('./version');
 const { Game, defaultKomi } = require('./game/game');
+const { gameFromSGF } = require('./game/sgf');
 const { EngineManager } = require('./engine/manager');
 const { listLevels, findLevel, paramsForLevel } = require('./engine/levels');
 const { HardwareBridge } = require('./hardware');
 const rules = require('./game/board');
 
 const cfg = loadConfig();
-const PUBLIC_DIR = path.join(ROOT, 'public');
+// 前端资源跟着代码走（打包后在 asar 里），引擎和权重才在 ROOT 下
+const PUBLIC_DIR = path.join(APP_DIR, 'public');
 
 const engine = new EngineManager();
 const hardware = new HardwareBridge({ config: cfg });
@@ -144,7 +146,10 @@ async function maybeRunAi() {
 
   try {
     const color = game.turn;
-    const mv = await engine.genmove(game, color, game.levelId);
+    // 电脑的思考时间也要受自己的棋钟限制，不然读秒会直接被拖死
+    const remain = game.remainingSeconds(color);
+    const maxTimeCap = Number.isFinite(remain) ? Math.max(0.5, Math.min(remain * 0.5, 30)) : undefined;
+    const mv = await engine.genmove(game, color, game.levelId, { maxTimeCap });
     if (!game || game.status !== 'playing' || game.turn !== color) return;
 
     if (mv.resign) {
@@ -165,12 +170,40 @@ async function maybeRunAi() {
       }
       if (game.status === 'scoring') await hardware.onSync(game);
     }
+    if (game.status === 'scoring') maybeAutoDead();
   } catch (err) {
     lastError = `AI 出子失败：${err.message}`;
     console.warn('[ai]', err);
   } finally {
     aiThinking = false;
     aiScheduled = false;
+    broadcast();
+  }
+}
+
+/**
+ * 进入数子阶段后自动判定死子。
+ * 用 game.id + 手数 做去重，同一局面只判一次，避免用户手动改完又被覆盖。
+ */
+let autoDeadKey = null;
+async function maybeAutoDead() {
+  if (!game || game.status !== 'scoring') {
+    autoDeadKey = null;
+    return;
+  }
+  const key = `${game.id}:${game.moveLog.length}`;
+  if (autoDeadKey === key) return;
+  autoDeadKey = key;
+
+  const result = await engine.autoDead(game);
+  if (!result) {
+    lastError = null;
+    broadcast();
+    return;
+  }
+  if (game && game.status === 'scoring' && `${game.id}:${game.moveLog.length}` === key) {
+    game.setDeadStones(result.dead);
+    if (result.score) game.engineScore = result.score;
     broadcast();
   }
 }
@@ -218,6 +251,7 @@ async function handleApi(req, res, url) {
       komi,
       levelId,
       humanColor: body.humanColor === 'white' ? rules.WHITE : rules.BLACK,
+      timeControl: body.timeControl,
     });
     lastError = null;
     await hardware.onGameStart(game);
@@ -261,6 +295,7 @@ async function handleApi(req, res, url) {
     if (!r.ok) return sendJson(res, 200, { ok: false, reason: r.reason, message: REASON_TEXT[r.reason] });
     await hardware.onSync(game);
     broadcast();
+    if (game.status === 'scoring') maybeAutoDead();
     maybeRunAi();
     return sendJson(res, 200, { ok: true, ...fullState() });
   }
@@ -319,7 +354,29 @@ async function handleApi(req, res, url) {
     // 第一步：进入数子阶段，让用户标记死子
     if (game.status === 'playing') game.beginScoring();
     broadcast();
+    maybeAutoDead();
     return sendJson(res, 200, { ok: true, ...fullState() });
+  }
+
+  /** 手动触发自动判定死子（界面上的"自动判定死子"按钮）。 */
+  if (p === '/api/game/auto-dead' && method === 'POST') {
+    if (game.status !== 'scoring') {
+      return sendJson(res, 200, { ok: false, reason: 'not-scoring', message: '还没进入数子阶段', ...fullState() });
+    }
+    const result = await engine.autoDead(game);
+    if (!result) {
+      return sendJson(res, 200, {
+        ok: false,
+        reason: 'no-engine',
+        message: '自动判定需要 KataGo，当前不可用，请手动点击棋块标记死子',
+        ...fullState(),
+      });
+    }
+    game.setDeadStones(result.dead);
+    if (result.score) game.engineScore = result.score;
+    autoDeadKey = `${game.id}:${game.moveLog.length}`;
+    broadcast();
+    return sendJson(res, 200, { ok: true, dead: result.dead, score: result.score, ...fullState() });
   }
 
   if (p === '/api/game/hint' && method === 'POST') {
@@ -337,6 +394,15 @@ async function handleApi(req, res, url) {
     }
   }
 
+  /**
+   * 复盘用：取"下完第 ply 手之后"的局面。
+   * ply 省略或等于手数时就是当前局面。
+   */
+  if (p === '/api/game/position' && method === 'GET') {
+    const ply = url.searchParams.get('ply');
+    return sendJson(res, 200, { ok: true, position: game.positionAt(ply == null ? game.moveLog.length : Number(ply)) });
+  }
+
   if (p === '/api/sgf' && method === 'GET') {
     const sgf = game.toSGF();
     res.writeHead(200, {
@@ -344,6 +410,29 @@ async function handleApi(req, res, url) {
       'Content-Disposition': `attachment; filename="game-${Date.now()}.sgf"`,
     });
     return res.end(sgf);
+  }
+
+  /**
+   * 读入 SGF 复盘。
+   * 前端用文件选择框读成文本 POST 过来（桌面版同样走这条路，不需要额外权限）。
+   */
+  if (p === '/api/sgf/load' && method === 'POST') {
+    const body = await readBody(req);
+    if (!body.sgf || typeof body.sgf !== 'string') {
+      return sendJson(res, 200, { ok: false, message: '没有收到 SGF 内容' });
+    }
+    try {
+      const loaded = gameFromSGF(body.sgf);
+      game = loaded;
+      lastError = null;
+      autoDeadKey = null;
+      aiThinking = false;
+      aiScheduled = false;
+      broadcast();
+      return sendJson(res, 200, { ok: true, ...fullState() });
+    } catch (err) {
+      return sendJson(res, 200, { ok: false, message: `SGF 解析失败：${err.message}` });
+    }
   }
 
   if (p === '/api/hardware/test' && method === 'POST') {
@@ -359,7 +448,8 @@ async function handleApi(req, res, url) {
   return sendJson(res, 404, { ok: false, message: '未知接口' });
 }
 
-const server = http.createServer(async (req, res) => {
+function createHttpServer() {
+  return http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   try {
     if (url.pathname.startsWith('/api/')) {
@@ -372,35 +462,93 @@ const server = http.createServer(async (req, res) => {
     if (!res.headersSent) sendJson(res, 500, { ok: false, message: err.message });
     else res.end();
   }
-});
+  });
+}
 
 // ---------------------------------------------------------------- 启动
 
-const port = cfg.server.port || 8080;
-const host = cfg.server.host || '127.0.0.1';
+/**
+ * 启动整套服务。
+ * 桌面版（Electron）和命令行版都用这一个入口，区别只是谁来开窗口。
+ *
+ * @param {{port?: number, host?: string, quiet?: boolean}} options
+ *        port 传 0 表示让系统分配一个空闲端口，避免和别的程序撞车
+ */
+async function startServer(options = {}) {
+  const host = options.host || cfg.server.host || '127.0.0.1';
+  const port = options.port != null ? options.port : cfg.server.port || 8080;
+  const quiet = Boolean(options.quiet);
 
-server.listen(port, host, async () => {
-  const url = `http://${host === '0.0.0.0' ? 'localhost' : host}:${port}`;
-  console.log('');
-  console.log(`  围棋对战程序 v${VERSION}`);
-  console.log('  ----------------------------------------');
-  console.log(`  界面地址: ${url}`);
-  console.log('');
-  console.log('  引擎正在后台初始化（首次使用 OpenCL 需要做一次性内核调优，可能要几分钟）...');
+  const server = createHttpServer();
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(port, host, resolve);
+  });
+  const actualPort = server.address().port;
+  const url = `http://${host === '0.0.0.0' ? 'localhost' : host}:${actualPort}`;
+
+  if (!quiet) {
+    console.log('');
+    console.log(`  围棋对战程序 v${VERSION}`);
+    console.log('  ----------------------------------------');
+    console.log(`  界面地址: ${url}`);
+    console.log('');
+    console.log('  引擎正在后台初始化（首次使用 OpenCL 需要做一次性内核调优，可能要几分钟）...');
+  }
 
   hardware.start();
-  try {
-    await engine.init();
-  } catch (err) {
-    console.error('[engine] 初始化异常:', err);
-  }
-  broadcast();
-});
 
-process.on('SIGINT', async () => {
-  console.log('\n正在关闭 ...');
-  await engine.shutdown();
-  await hardware.stop();
-  server.close(() => process.exit(0));
-  setTimeout(() => process.exit(0), 3000);
-});
+  // 棋钟：每 0.5 秒推进一次。只有开了时间限制的对局才需要推送。
+  const clockTimer = setInterval(() => {
+    if (!game || game.status !== 'playing' || !game.clock.enabled) return;
+    const t = game.tickClock();
+    if (t && t.timeout != null) {
+      game.loseOnTime(t.timeout);
+      Promise.resolve(hardware.onGameEnd(game)).catch(() => {});
+    }
+    broadcast();
+  }, 500);
+  clockTimer.unref?.();
+
+  // 引擎初始化放在后台跑，别挡住窗口打开
+  const engineReady = engine.init().catch((err) => {
+    console.error('[engine] 初始化异常:', err);
+  });
+  broadcast();
+
+  let closed = false;
+  const shutdown = async () => {
+    if (closed) return;
+    closed = true;
+    // 先掐掉所有 SSE 长连接：它们是 keep-alive 的，
+    // 不断开的话 server.close() 会一直等下去，桌面版退出就会卡住
+    for (const res of sseClients) {
+      try {
+        res.end();
+      } catch {
+        /* 忽略 */
+      }
+    }
+    sseClients.clear();
+    clearInterval(clockTimer);
+    await engine.shutdown();
+    await hardware.stop();
+    if (typeof server.closeAllConnections === 'function') server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  };
+
+  return { server, port: actualPort, host, url, engineReady, shutdown };
+}
+
+// 直接 node server/index.js 运行时才进命令行模式
+if (require.main === module) {
+  startServer().then(({ shutdown }) => {
+    process.on('SIGINT', async () => {
+      console.log('\n正在关闭 ...');
+      await shutdown();
+      process.exit(0);
+    });
+  });
+}
+
+module.exports = { startServer, createHttpServer };

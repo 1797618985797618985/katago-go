@@ -155,10 +155,21 @@ async function waitAi(timeoutMs = 60000) {
   check('双方停手后进入数子阶段', r.ok && r.game.status === 'scoring', r.game && r.game.status);
   check('数子阶段提供计分预览', Boolean(r.game.scorePreview), JSON.stringify(r.game.scorePreview && r.game.scorePreview.text));
 
+  // 进入数子阶段后服务端会自动判定一次死子，所以这里只验证"点一下状态会变"
+  const deadBefore = r.game.deadStones.length;
   r = await call('/api/game/dead', 'POST', { x: 4, y: 4 });
-  check('可标记死子', r.ok && r.game.deadStones.length === 1, `dead=${r.game.deadStones && r.game.deadStones.length}`);
+  check('点击棋块可以切换死子标记', r.ok && r.game.deadStones.length !== deadBefore, `${deadBefore} -> ${r.game.deadStones.length}`);
+  const deadMid = r.game.deadStones.length;
   r = await call('/api/game/dead', 'POST', { x: 4, y: 4 });
-  check('可取消死子标记', r.ok && r.game.deadStones.length === 0);
+  check('再点一次可以改回来', r.ok && r.game.deadStones.length === deadBefore, `${deadMid} -> ${r.game.deadStones.length}`);
+
+  // 自动判定死子（有 KataGo 才做，没有则应给出明确提示）
+  r = await call('/api/game/auto-dead', 'POST');
+  if (r.reason === 'no-engine') {
+    check('没有引擎时给出明确提示', /手动/.test(r.message || ''), JSON.stringify(r.message));
+  } else {
+    check('自动判定死子返回结果', r.ok && Array.isArray(r.dead), JSON.stringify({ ok: r.ok, reason: r.reason }));
+  }
 
   r = await call('/api/game/score', 'POST', { confirm: true });
   check('确认终局', r.ok && r.game.status === 'finished');
@@ -198,6 +209,44 @@ async function waitAi(timeoutMs = 60000) {
   check('可以主动进入数子阶段', r.ok && r.game.status === 'scoring');
   r = await call('/api/game/score', 'POST', { confirm: true });
   check('数子阶段可以确认终局', r.ok && r.game.status === 'finished');
+
+  // ---------------- 时间限制
+  console.log('\n时间限制');
+  r = await call('/api/game/new', 'POST', {
+    mode: 'pvp',
+    boardSize: 9,
+    komi: 7,
+    timeControl: { enabled: true, mainTimeSec: 600, byoYomiSec: 30, byoYomiCount: 3 },
+  });
+  check('可以创建带棋钟的对局', r.ok && r.game.clock.enabled === true, JSON.stringify(r.game && r.game.clock));
+  check('初始剩余时间等于基本用时', Math.abs(r.game.clock.black.main - 600) < 1, String(r.game.clock.black.main));
+  check('初始读秒次数正确', r.game.clock.black.periods === 3 && r.game.clock.black.period === 0);
+
+  await sleep(1600);
+  s = await call('/api/status');
+  check('轮到我的一方棋钟在走', s.game.clock.black.main < 599, String(s.game.clock.black.main));
+  check('对方棋钟不动', Math.abs(s.game.clock.white.main - 600) < 0.01, String(s.game.clock.white.main));
+
+  // ---------------- 复盘
+  console.log('\n复盘');
+  r = await call('/api/game/new', 'POST', { mode: 'pvp', boardSize: 9, komi: 7 });
+  await call('/api/game/move', 'POST', { x: 4, y: 4 });
+  await call('/api/game/move', 'POST', { x: 5, y: 5 });
+  r = await call('/api/game/position?ply=1');
+  check('能取到第 1 手之后的局面', r.ok && r.position.ply === 1, JSON.stringify(r.position && r.position.ply));
+  check('第 1 手之后只有一颗子', r.position.cells.filter((c) => c !== 0).length === 1);
+  check('第 1 手之后轮到白棋', r.position.turn === 2);
+  check(
+    '最后一手标记正确',
+    r.position.lastMove && r.position.lastMove.x === 4 && r.position.lastMove.y === 4,
+    JSON.stringify(r.position.lastMove),
+  );
+  r = await call('/api/game/position?ply=0');
+  check('ply=0 是空盘', r.position.cells.filter((c) => c !== 0).length === 0);
+  r = await call('/api/game/position');
+  check('不带 ply 时返回当前局面', r.position.isLive === true && r.position.ply === 2, JSON.stringify(r.position.ply));
+  r = await call('/api/game/position?ply=99');
+  check('ply 超出手数时截到当前局面', r.position.ply === 2 && r.position.isLive === true);
 
   // ---------------- 硬件接口
   console.log('\n硬件接口');

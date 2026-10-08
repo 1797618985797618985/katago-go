@@ -94,9 +94,15 @@ class GoBoard {
       this.seen = new Set();
       // 重建历史局面集合：逐步重放以恢复禁全同信息
       const replay = new Uint8Array(this.size * this.size);
+      // 让子不在 play() 里落下，重放时要先摆回去，否则局面键会算错
+      for (const mv of this.moves) {
+        if (mv.handicap) {
+          for (const p of mv.points) replay[rules.idxOf(this.size, p.x, p.y)] = BLACK;
+        }
+      }
       this.seen.add(rules.boardKey(replay));
       for (const mv of this.moves) {
-        if (mv.pass) continue;
+        if (mv.pass || mv.handicap) continue;
         rules.tryPlay(replay, this.size, mv.x, mv.y, mv.color, null);
         this.seen.add(rules.boardKey(replay));
       }
@@ -116,6 +122,24 @@ class GoBoard {
       this.moves.push({ color: BLACK, handicap: true, points: pts });
     }
     return pts;
+  }
+
+  /**
+   * 按给定坐标摆子（导入 SGF 的 AB / AW 用）。
+   * 同时记一条 moves，这样导出 GTP 命令和复盘快照都能对齐。
+   */
+  setStones(points, color) {
+    const placed = [];
+    for (const p of points) {
+      if (!rules.onBoard(this.size, p.x, p.y)) continue;
+      this.cells[rules.idxOf(this.size, p.x, p.y)] = color;
+      placed.push(p);
+    }
+    if (placed.length > 0) {
+      this.seen.add(rules.boardKey(this.cells));
+      this.moves.push({ color, handicap: true, points: placed });
+    }
+    return placed;
   }
 
   /** 当前所有合法落子点（用于随机模拟与"还有棋可下吗"的判断）。 */
@@ -139,13 +163,14 @@ class GoBoard {
   /** 供引擎使用：把棋盘压成一行 GTP 命令序列（让子 + 逐手）。 */
   toGtpSequence() {
     const lines = [];
-    const handicapMove = this.moves.find((m) => m.handicap);
-    if (handicapMove && handicapMove.points.length > 0) {
-      const coords = handicapMove.points.map((p) => rules.toGtp(this.size, p.x, p.y));
-      lines.push(`set_free_handicap ${coords.join(' ')}`);
-    }
     for (const mv of this.moves) {
-      if (mv.handicap) continue;
+      // 摆放的棋子：黑棋用让子命令，白棋只能逐个 play（SGF 的 AW 属于摆局）
+      if (mv.handicap) {
+        const coords = mv.points.map((p) => rules.toGtp(this.size, p.x, p.y));
+        if (mv.color === BLACK) lines.push(`set_free_handicap ${coords.join(' ')}`);
+        else for (const c of coords) lines.push(`play W ${c}`);
+        continue;
+      }
       if (mv.pass) lines.push(`play ${mv.color === BLACK ? 'B' : 'W'} pass`);
       else lines.push(`play ${mv.color === BLACK ? 'B' : 'W'} ${rules.toGtp(this.size, mv.x, mv.y)}`);
     }
