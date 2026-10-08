@@ -51,6 +51,8 @@ class EngineManager {
     this.status = 'idle'; // idle | probing | loading | ready | builtin | error
     this.error = null;
     this.warnings = [];
+    /** 状态变成 loading 的时刻，用来在界面上显示已经等了多久 */
+    this.loadingSince = null;
 
     this.queue = Promise.resolve();
   }
@@ -110,6 +112,7 @@ class EngineManager {
     }
 
     this.status = 'loading';
+      this.loadingSince = Date.now();
     const boardSize = this.cfg.defaults.boardSize || 19;
     const t0 = Date.now();
     try {
@@ -307,6 +310,9 @@ class EngineManager {
     const usableLevels = LEVELS.filter((l) => l.index <= this.maxLevelIndex).map((l) => l.id);
     return {
       status: this.status,
+      // 首次 OpenCL 要做 GPU 内核调优，界面据此显示更具体的原因
+      tuning: Boolean(this.main && this.main.info && this.main.info.tuning),
+      loadingSeconds: this.loadingSince ? Math.round((Date.now() - this.loadingSince) / 1000) : 0,
       engine: this.main && this.main.running ? 'katago' : 'builtin',
       backend: this.backend ? { kind: this.backend.kind, label: this.backend.label } : null,
       backendVersion: this.main ? this.main.info.version : '',

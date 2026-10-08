@@ -600,8 +600,15 @@ async function startServer(options = {}) {
 
   hardware.start();
 
+  let loadingTick = 0;
   // 棋钟：每 0.5 秒推进一次。只有开了时间限制的对局才需要推送。
   const clockTimer = setInterval(() => {
+    // 引擎还没就绪时定期推一次状态，好让界面显示"已经等了多久"
+    if (engine.status === 'loading' || engine.status === 'probing') {
+      loadingTick += 1;
+      if (loadingTick % 4 === 0) broadcast();
+      return;
+    }
     if (!game || game.status !== 'playing' || !game.clock.enabled) return;
     const t = game.tickClock();
     if (t && t.timeout != null) {

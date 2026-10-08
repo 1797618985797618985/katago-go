@@ -1,6 +1,6 @@
 {
   "name": "katago-go",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "private": true,
   "productName": "围棋对战",
   "description": "基于 KataGo 的围棋对战程序：人机对战（级位/段位难度）与人人对战，可完全离线运行，并为实体电驱棋盘预留驱动接口",

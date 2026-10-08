@@ -36,6 +36,7 @@ param(
     [switch]$SkipNets,
     [switch]$SkipHuman,
     [switch]$SkipFast,
+    [switch]$SkipWarmup,
     [switch]$Force
 )
 
@@ -182,4 +183,37 @@ if ($ok.Count -eq 0) {
 } else {
     Write-Host "`n优先使用: $($ok[0])"
 }
+
+# ---------------------------------------------------------------- 预热
+# 为什么要有这一步：OpenCL 版第一次加载权重时会对当前显卡做一次内核调优，
+# 在 4070 笔记本上要六七分钟（不同显卡不一样），调完会把结果缓存到
+# 用户目录下的 .katago/opencltuning，之后启动只要几秒。
+# 把它放在安装阶段做掉，免得用户第一次下棋时干等。
+if (-not $SkipWarmup -and $ok.Count -gt 0) {
+    $warmKind = $ok[0]
+    $warmExe = Join-Path (Join-Path $BinDir $warmKind) 'katago.exe'
+    $warmModel = Get-ChildItem $ModelDir -Filter '*.gz' |
+        Where-Object { $_.Name -notlike '*human*' } |
+        Sort-Object Length -Descending |
+        Select-Object -First 1
+
+    if ($warmModel) {
+        Write-Host ""
+        Write-Host "预热引擎（$warmKind）..."
+        Write-Host "  首次运行要对你的显卡做一次内核调优，可能要几分钟，只需做一次。"
+        Write-Host "  调优结果会缓存到 $env:USERPROFILE\.katago\opencltuning"
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        # 走一遍真实的 GTP 流程，让引擎把模型加载和调优都做完
+        $cmds = "boardsize 19`nkomi 7.5`nclear_board`nkata-set-param maxVisits 1`ngenmove B`nquit`n"
+        try {
+            $cmds | & $warmExe gtp -model $warmModel.FullName *> $null
+            $sw.Stop()
+            Write-Host ("  完成，用时 {0:N0} 秒。以后启动只要几秒。" -f $sw.Elapsed.TotalSeconds)
+        } catch {
+            $sw.Stop()
+            Write-Warning "  预热失败（$($_.Exception.Message)）；不影响使用，只是第一次启动会慢一些。"
+        }
+    }
+}
+
 Write-Host "`n完成。之后运行 'npm start' 即可，全程无需联网。"
