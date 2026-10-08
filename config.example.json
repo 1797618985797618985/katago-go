@@ -10,7 +10,7 @@
     "fastModel": "engine/models/kata1-b6c96-s175395328-d26788732.txt.gz",
     "humanModel": "engine/models/b18c384nbt-humanv0.bin.gz",
     "useHumanModel": true,
-    "humanModelMaxIndex": 32,
+    "humanModelMaxIndex": 33,
     "threads": 8,
     "strength": "auto"
   },

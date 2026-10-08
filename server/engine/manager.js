@@ -6,7 +6,7 @@ const path = require('node:path');
 const { KataGoEngine, probeBuilds } = require('./katago');
 const { BuiltinEngine } = require('./builtin');
 const { loadConfig, discoverModels, resolvePath } = require('../config');
-const { paramsForLevel, findLevel, LEVELS } = require('./levels');
+const { paramsForLevel, findLevel, LEVELS, levelIndexFromVisits } = require('./levels');
 
 /**
  * 引擎管理器。
@@ -29,14 +29,6 @@ const TARGET_MOVE_SECONDS = 8;
 
 /** 用人类模型时，一步至少留这么多访问给"要不要 pass / 认输"的判断。 */
 const HUMAN_MIN_VISITS = 40;
-
-function levelIndexFromVisits(visits) {
-  let best = 0;
-  for (const l of LEVELS) {
-    if (paramsForLevel(l.id).visits <= visits) best = Math.max(best, l.index);
-  }
-  return best;
-}
 
 class EngineManager {
   constructor() {
@@ -192,7 +184,8 @@ class EngineManager {
   _shouldUseHuman(params) {
     if (!this.humanModelPath) return false;
     const maxIdx = this.cfg.katago.humanModelMaxIndex != null ? this.cfg.katago.humanModelMaxIndex : 32;
-    return params.encounters <= maxIdx;
+    // curve 是 0~38 的强度曲线位置，与人类模型档位一一对应
+    return params.curve <= maxIdx;
   }
 
   async genmove(game, color, levelId) {

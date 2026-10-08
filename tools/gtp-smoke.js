@@ -11,7 +11,7 @@ const { Game } = require('../server/game/game');
 const { paramsForLevel } = require('../server/engine/levels');
 
 const levels = process.argv.slice(2);
-const LEVELS = levels.length ? levels : ['20k', '5k', '1d', '9d'];
+const LEVELS = levels.length ? levels : ['20k', '5k', '1d', '8d'];
 
 const ts = () => new Date().toISOString().slice(11, 23);
 const log = (...a) => console.log(`[${ts()}]`, ...a);

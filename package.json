@@ -27,7 +27,7 @@
   "scripts": {
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
-    "test": "node tools/rules-test.js",
+    "test": "node tools/rules-test.js && node tools/engine-test.js",
     "test:api": "node tools/api-test.js",
     "smoke": "node tools/gtp-smoke.js",
     "mock-board": "node tools/mock-board.js",

@@ -203,15 +203,18 @@ class BuiltinEngine {
     const blunder = params.builtinBlunder != null ? params.builtinBlunder : 0.25;
 
     const { points, emptyBoard } = candidatePoints(base, size, color);
-    if (points.length === 0) return { pass: true };
 
-    // 开局直接从角部好点里挑，省时间也更像样
+    // 空盘或开局阶段：直接从角部好点里挑，省时间也更像样。
+    // 注意这一步必须在"候选点为空就 pass"之前 —— 空盘时附近没有棋子，
+    // 候选点列表本来就是空的，否则第一手会直接停一手。
     if (emptyBoard || game.board.moves.length < 4) {
       const book = openingBook(size).filter(
         (p) => base[p.y * size + p.x] === EMPTY && rules.isLegal(base, size, p.x, p.y, color, ko),
       );
       if (book.length > 0) return book[Math.floor(rand() * book.length)];
     }
+
+    if (points.length === 0) return { pass: true };
 
     const legalPoints = points.filter((p) => rules.isLegal(base, size, p.x, p.y, color, ko));
     if (legalPoints.length === 0) return { pass: true };
