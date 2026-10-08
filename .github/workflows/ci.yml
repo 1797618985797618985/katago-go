@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: 规则引擎测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 语法检查
+        run: |
+          for f in $(find server public tools -name '*.js' -not -path '*/node_modules/*'); do
+            node --check "$f"
+          done
+
+      - name: 规则引擎单元测试
+        run: node tools/rules-test.js

@@ -2,15 +2,44 @@
   "name": "katago-go",
   "version": "1.0.0",
   "private": true,
-  "description": "基于 KataGo 的围棋对战程序：人机对战（级位/段位难度）与人人对战",
+  "description": "基于 KataGo 的围棋对战程序：人机对战（级位/段位难度）与人人对战，可完全离线运行，并为实体电驱棋盘预留驱动接口",
+  "keywords": [
+    "go",
+    "weiqi",
+    "baduk",
+    "katago",
+    "gtp",
+    "board-game",
+    "mcts",
+    "offline"
+  ],
+  "author": "Mo_cun",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/1797618985797618985/katago-go.git"
+  },
+  "homepage": "https://github.com/1797618985797618985/katago-go#readme",
+  "bugs": {
+    "url": "https://github.com/1797618985797618985/katago-go/issues"
+  },
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
-    "dev": "node --watch server/index.js"
+    "dev": "node --watch server/index.js",
+    "test": "node tools/rules-test.js",
+    "test:api": "node tools/api-test.js",
+    "smoke": "node tools/gtp-smoke.js",
+    "mock-board": "node tools/mock-board.js",
+    "fetch-engine": "pwsh -NoProfile -File tools/fetch-engine.ps1"
   },
   "engines": {
     "node": ">=18"
   },
   "dependencies": {},
-  "license": "MIT"
+  "os": [
+    "win32",
+    "linux",
+    "darwin"
+  ]
 }

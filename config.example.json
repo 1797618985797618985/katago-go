@@ -5,16 +5,25 @@
   },
   "katago": {
     "enabled": true,
-    "path": "engine/katago.exe",
-    "model": "engine/model.bin.gz",
-    "config": "engine/gtp.cfg",
-    "humanModel": "",
-    "threads": 4,
-    "useHumanModel": false
+    "path": "",
+    "model": "engine/models/kata1-b18c384nbt-s9996604416-d4316597426.bin.gz",
+    "fastModel": "engine/models/kata1-b6c96-s175395328-d26788732.txt.gz",
+    "humanModel": "engine/models/b18c384nbt-humanv0.bin.gz",
+    "useHumanModel": true,
+    "humanModelMaxIndex": 32,
+    "threads": 8,
+    "strength": "auto"
+  },
+  "hardware": {
+    "enabled": false,
+    "driver": "none",
+    "tcp": { "host": "127.0.0.1", "port": 9100, "reconnectMs": 3000 },
+    "stdio": { "command": "", "args": [] },
+    "options": { "interCommandDelayMs": 120, "ackTimeoutMs": 8000 }
   },
   "defaults": {
     "boardSize": 19,
-    "komi": 6.5,
+    "komi": 7.5,
     "level": "10k"
   }
 }
