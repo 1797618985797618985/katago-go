@@ -18,7 +18,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('ensure-repo', 'push', 'create-pr', 'status')]
+    [ValidateSet('ensure-repo', 'push', 'create-pr', 'merge-pr', 'release', 'repo-settings', 'status')]
     [string]$Action,
 
     [string]$RepoName = 'katago-go',
@@ -26,8 +26,17 @@ param(
     [string]$Branch,
     [string]$Title,
     [string]$Body = '',
+    [int]$Number = 0,
+    [ValidateSet('merge', 'squash', 'rebase')]
+    [string]$Method = 'squash',
+    [string]$Tag = '',
+    [string]$Name = '',
+    [string]$Notes = '',
+    [string]$Description = '',
+    [string[]]$Topics = @(),
     [switch]$Public,
-    [switch]$Draft
+    [switch]$Draft,
+    [switch]$Prerelease
 )
 
 $ErrorActionPreference = 'Stop'
@@ -48,7 +57,8 @@ function Invoke-GitHubApi {
         [string]$Method = 'GET',
         [string]$Path,
         $Body,
-        [switch]$AllowFailure
+        [switch]$AllowFailure,
+        [int]$Retries = 3
     )
     $headers = @{
         Authorization          = "token $script:Token"
@@ -62,14 +72,23 @@ function Invoke-GitHubApi {
         $params.Body = ($Body | ConvertTo-Json -Depth 8 -Compress)
         $params.ContentType = 'application/json'
     }
-    try {
-        return Invoke-RestMethod @params
-    } catch {
-        if ($AllowFailure) { return $null }
-        $detail = ''
-        if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $detail = $_.ErrorDetails.Message }
-        throw "GitHub API $Method $Path 失败: $($_.Exception.Message) $detail"
+    $lastErr = $null
+    for ($attempt = 1; $attempt -le $Retries; $attempt++) {
+        try {
+            return Invoke-RestMethod @params
+        } catch {
+            $lastErr = $_
+            $status = 0
+            try { $status = [int]$_.Exception.Response.StatusCode } catch { }
+            # 5xx / 网络抖动值得重试；4xx 直接放弃
+            if ($status -ge 400 -and $status -lt 500) { break }
+            if ($attempt -lt $Retries) { Start-Sleep -Milliseconds (400 * $attempt) }
+        }
     }
+    if ($AllowFailure) { return $null }
+    $detail = ''
+    if ($lastErr.ErrorDetails -and $lastErr.ErrorDetails.Message) { $detail = $lastErr.ErrorDetails.Message }
+    throw "GitHub API $Method $Path 失败: $($lastErr.Exception.Message) $detail"
 }
 
 $script:User = Invoke-GitHubApi -Path '/user'
@@ -171,5 +190,70 @@ switch ($Action) {
         $prs = Invoke-GitHubApi -Path "/repos/$(Get-RepoFullName)/pulls?state=open&per_page=20"
         if ($prs.Count -eq 0) { Write-Host '没有打开的 PR。' }
         else { $prs | ForEach-Object { Write-Host ("  #{0} [{1}] {2}" -f $_.number, $_.head.ref, $_.title) } }
+    }
+
+    'merge-pr' {
+        if (-not (Test-RemoteExists)) { throw "远程仓库不存在，请先运行 -Action ensure-repo" }
+        $n = $Number
+        if (-not $n) {
+            $prs = Invoke-GitHubApi -Path "/repos/$(Get-RepoFullName)/pulls?state=open&per_page=1"
+            if (-not $prs -or $prs.Count -eq 0) { throw '没有打开的 PR。' }
+            $n = $prs[0].number
+        }
+        $pr = Invoke-GitHubApi -Path "/repos/$(Get-RepoFullName)/pulls/$n"
+        Write-Host "合并 PR #$n 「$($pr.title)」 ($($pr.head.ref) -> $($pr.base.ref)) 方式=$Method"
+        $res = Invoke-GitHubApi -Method PUT -Path "/repos/$(Get-RepoFullName)/pulls/$n/merge" -Body @{
+            merge_method = $Method
+            commit_title = "$($pr.title) (#$n)"
+        }
+        if ($res.merged) {
+            Write-Host "已合并: $($res.sha)"
+            git fetch origin --prune 2>&1 | Out-Null
+            Write-Host '本地已 fetch，可执行 git checkout main; git pull 同步。'
+        } else {
+            Write-Warning "未合并: $($res.message)"
+        }
+    }
+
+    'release' {
+        if (-not (Test-RemoteExists)) { throw "远程仓库不存在，请先运行 -Action ensure-repo" }
+        if (-not $Tag) { throw '请用 -Tag 指定版本号，例如 v1.0.0' }
+        $releaseName = if ($Name) { $Name } else { $Tag }
+        $releaseBody = $Notes
+        if (-not $releaseBody) {
+            # 未提供说明时，从 CHANGELOG.md 里取对应版本段落
+            $changelog = Join-Path (Split-Path -Parent $PSScriptRoot) 'CHANGELOG.md'
+            if (Test-Path $changelog) {
+                $text = Get-Content $changelog -Raw
+                $pattern = "(?ms)^##\s*\[?$([regex]::Escape($Tag.TrimStart('v')))\]?.*?(?=^##\s|\z)"
+                $m = [regex]::Match($text, $pattern)
+                if ($m.Success) { $releaseBody = $m.Value.Trim() }
+            }
+        }
+        if (-not $releaseBody) { $releaseBody = "版本 $Tag" }
+
+        $release = Invoke-GitHubApi -Method POST -Path "/repos/$(Get-RepoFullName)/releases" -Body @{
+            tag_name               = $Tag
+            target_commitish       = $Base
+            name                   = $releaseName
+            body                   = $releaseBody
+            draft                  = [bool]$Draft
+            prerelease             = [bool]$Prerelease
+            generate_release_notes = $false
+        }
+        Write-Host "Release 已创建: $($release.html_url)"
+        Write-Output $release.html_url
+    }
+
+    'repo-settings' {
+        if (-not (Test-RemoteExists)) { throw "远程仓库不存在，请先运行 -Action ensure-repo" }
+        $payload = @{}
+        if ($Description) { $payload.description = $Description }
+        if ($Topics.Count -gt 0) { $payload.topics = $Topics }
+        if ($payload.Count -eq 0) { throw '请至少提供 -Description 或 -Topics' }
+        $repo = Invoke-GitHubApi -Method PATCH -Path "/repos/$(Get-RepoFullName)" -Body $payload
+        Write-Host "仓库简介: $($repo.description)"
+        $t = Invoke-GitHubApi -Path "/repos/$(Get-RepoFullName)/topics"
+        Write-Host "话题标签: $($t.names -join ', ')"
     }
 }
