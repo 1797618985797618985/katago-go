@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
 
 /** 代码和前端资源所在目录。打包后它在 app.asar 里，只读。 */
 const APP_DIR = path.resolve(__dirname, '..');
@@ -21,6 +22,21 @@ function appRoot() {
  */
 function dataDir() {
   return process.env.APP_DATA ? path.resolve(process.env.APP_DATA) : appRoot();
+}
+
+/**
+ * 引擎缓存目录（OpenCL 调优结果等）。
+ *
+ * 特意固定放在用户目录下，而不是跟着 dataDir 走：
+ *   - KataGo 在 Windows 上默认写"当前目录"，而打包成单文件 exe 后每次启动
+ *     都会解压到临时目录，缓存每次都会丢，等于每次启动都要重新调优几分钟；
+ *   - 固定位置还能让"安装时预热"与"运行时"共用同一份缓存，
+ *     开发模式与打包版也共用，不至于各调一次。
+ */
+function engineCacheDir() {
+  const base =
+    process.env.LOCALAPPDATA || process.env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache');
+  return path.join(base, 'katago-go');
 }
 
 const ROOT = appRoot();
@@ -146,6 +162,7 @@ module.exports = {
   APP_DIR,
   appRoot,
   dataDir,
+  engineCacheDir,
   DEFAULTS,
   loadConfig,
   resolvePath,

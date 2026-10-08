@@ -197,16 +197,21 @@ if (-not $SkipWarmup -and $ok.Count -gt 0) {
         Sort-Object Length -Descending |
         Select-Object -First 1
 
+    # 必须和程序运行时用同一个缓存目录，否则这里白调一次。
+    # 程序侧见 server/config.js 的 engineCacheDir()。
+    $warmDataDir = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'katago-go' } else { Join-Path $HOME '.cache/katago-go' }
+    New-Item -ItemType Directory -Force -Path $warmDataDir | Out-Null
+
     if ($warmModel) {
         Write-Host ""
         Write-Host "预热引擎（$warmKind）..."
         Write-Host "  首次运行要对你的显卡做一次内核调优，可能要几分钟，只需做一次。"
-        Write-Host "  调优结果会缓存到 $env:USERPROFILE\.katago\opencltuning"
+        Write-Host "  调优结果会缓存到 $warmDataDir"
         $sw = [Diagnostics.Stopwatch]::StartNew()
         # 走一遍真实的 GTP 流程，让引擎把模型加载和调优都做完
         $cmds = "boardsize 19`nkomi 7.5`nclear_board`nkata-set-param maxVisits 1`ngenmove B`nquit`n"
         try {
-            $cmds | & $warmExe gtp -model $warmModel.FullName *> $null
+            $cmds | & $warmExe gtp -model $warmModel.FullName -override-config "homeDataDir = $($warmDataDir.Replace('\','/'))" *> $null
             $sw.Stop()
             Write-Host ("  完成，用时 {0:N0} 秒。以后启动只要几秒。" -f $sw.Elapsed.TotalSeconds)
         } catch {

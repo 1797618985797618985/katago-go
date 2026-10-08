@@ -5,7 +5,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const { GtpClient } = require('./gtp');
-const { resolvePath, resolveDataPath } = require('../config');
+const { resolvePath, resolveDataPath, engineCacheDir } = require('../config');
 const { parseAnalyzeLine, summarize } = require('./analyze');
 const rules = require('../game/board');
 
@@ -111,7 +111,11 @@ class KataGoEngine {
           maxTime: 2.0,
           ...extra,
         };
-    return Object.entries(overrides)
+    // 缓存目录必须显式指定：KataGo 在 Windows 上默认把 OpenCL 调优结果写进
+    // "当前目录"下的子目录，而打包成单文件 exe 后每次启动都解压到临时目录，
+    // 那样调优结果每次都会丢，等于每次启动都要重做几分钟的调优。
+    const withCacheDir = { homeDataDir: engineCacheDir().replace(/\\/g, '/'), ...overrides };
+    return Object.entries(withCacheDir)
       .map(([k, v]) => `${k} = ${v}`)
       .join(', ');
   }
