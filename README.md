@@ -9,7 +9,7 @@
 
 它是独立的窗口程序，不需要开浏览器，也不需要另外启动服务端。打包之后就是一个 exe。
 
-当前版本 1.2.3。
+当前版本 1.2.4。
 
 ![界面](docs/screenshot.png)
 
@@ -217,7 +217,7 @@ server/
     drivers.js        none / log / tcp / stdio 四种传输
 public/               界面，原生 HTML + CSS + JS，没有构建步骤
 engine/               引擎和权重，不进版本库
-tools/                下载脚本和几个测试
+tools/                下载脚本、GitHub 工作流和几个测试
 docs/                 硬件协议
 ```
 
@@ -228,6 +228,7 @@ docs/                 硬件协议
 
 ```bash
 node tools/check-version.js  # 版本号一致性：package.json / README / CHANGELOG
+node tools/check-sync.js     # 流程校验：改了代码就必须升版本号并更新 README / CHANGELOG
 node tools/rules-test.js     # 规则引擎，93 项：提子 / 自杀 / 劫 / 禁全同 / 让子 / 悔棋 /
                              #   数子 / 计时读秒 / SGF 导入导出
 node tools/engine-test.js    # 内置引擎与难度曲线，18 项，不需要 KataGo
@@ -235,7 +236,42 @@ node tools/gtp-smoke.js      # 引擎自检，需要先下好模型：拉进程�
 node tools/api-test.js       # 接口测试，需要先 npm run server
 ```
 
-前三个都不依赖 KataGo，CI 里跑的就是它们（发版流程里也会先跑一遍）。
+这些都不依赖 KataGo，CI 里跑的就是它们（发版流程里也会先跑一遍）。
+`npm test` 会把版本号、流程校验、规则引擎、内置引擎四项串起来跑。
+
+## 开发流程
+
+**改动一律走 PR，不直接提交到 main。** 而且每次改动都要同步升版本号，
+并更新 README 与 CHANGELOG —— 这条不是靠自觉，CI 会卡。
+
+工作流工具是 `tools/github.js`，凭据全部来自 `gh auth login`（脚本不读取也不打印令牌）：
+
+```bash
+gh auth login                # 一次性：HTTPS + 用 gh 认证 git
+gh auth setup-git            # 一次性：把 gh 注册成 git 的凭据助手
+
+node tools/github.js status                    # 看分支、脏文件、开着的 PR
+node tools/github.js prepare -m "fix: 说明"    # 建分支 + 升版本号 + 提交
+node tools/github.js open -t "fix: 说明"       # 推送 + 开 PR（正文取自 CHANGELOG）
+node tools/github.js merge -n 16               # squash 合并并同步本地 main
+```
+
+`prepare` 会按补丁号递增（`--minor` / `--major` / `--version x.y.z` 可以指定别的），
+一次性改掉 package.json、README 的「当前版本」和 CHANGELOG 的新条目，然后把它们提交。
+留的「（待补充）」需要手动填成实际内容。
+
+开 PR 前本地自查：
+
+```bash
+node tools/check-sync.js --base main
+```
+
+它会拿当前分支和基准分支的共同祖先比：只要 `server/` `public/` `desktop/` `tools/`
+里动过文件，就要求版本号真的升过、README 改过、CHANGELOG 有对应条目，
+否则以非零退出码失败。CI 里同一个脚本在跑，所以漏了也合不进去。
+
+> 版本号必须三处一致：`package.json` 的 `version`、README 的「当前版本 x.y.z」、
+> CHANGELOG 最新条目 `## [x.y.z]`。`tools/check-version.js` 负责这一项。
 
 ## 还没做的
 

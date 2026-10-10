@@ -1,6 +1,6 @@
 {
   "name": "katago-go",
-  "version": "1.2.3",
+  "version": "1.2.4",
   "private": true,
   "productName": "围棋对战",
   "description": "基于 KataGo 的围棋对战程序：人机对战（级位/段位难度）与人人对战，可完全离线运行，并为实体电驱棋盘预留驱动接口",
@@ -34,11 +34,14 @@
     "screenshot": "electron . --screenshot=docs/screenshot.png",
     "build": "electron-builder --win",
     "build:portable": "electron-builder --win portable",
-    "test": "node tools/check-version.js && node tools/rules-test.js && node tools/engine-test.js",
+    "test": "node tools/check-version.js && node tools/check-sync.js && node tools/rules-test.js && node tools/engine-test.js",
     "test:api": "node tools/api-test.js",
+    "test:sync": "node tools/check-sync.js",
     "smoke": "node tools/gtp-smoke.js",
     "mock-board": "node tools/mock-board.js",
-    "fetch-engine": "pwsh -NoProfile -File tools/fetch-engine.ps1"
+    "fetch-engine": "pwsh -NoProfile -File tools/fetch-engine.ps1",
+    "gh": "node tools/github.js",
+    "pr": "node tools/github.js pr"
   },
   "engines": {
     "node": ">=18"
