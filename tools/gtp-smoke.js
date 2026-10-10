@@ -26,7 +26,6 @@ const log = (...a) => console.log(`[${ts()}]`, ...a);
   log(`状态      : ${d.status}`);
   log(`后端      : ${d.backend ? d.backend.label : '(无)'} ${d.backendVersion}`);
   log(`权重      : ${d.modelKind} / ${d.model}`);
-  log(`人类模型  : ${d.humanModel ? (d.humanModelReady ? '已就绪' : '加载中') : '未配置'}`);
   log(`吞吐      : ${d.visitsPerSec} 次访问/秒`);
   log(`可支持到  : ${d.recommendedMaxLevel}`);
   for (const w of d.warnings) log(`提示      : ${w}`);
@@ -43,7 +42,8 @@ const log = (...a) => console.log(`[${ts()}]`, ...a);
     const mv = await mgr.genmove(game, game.turn, id);
     const secs = ((Date.now() - t) / 1000).toFixed(1);
     const desc = mv.pass ? 'pass' : mv.resign ? 'resign' : `(${mv.x},${mv.y})`;
-    log(`${id.padEnd(4)} visits=${String(p.visits).padEnd(5)} profile=${String(p.humanProfile).padEnd(10)} -> ${desc.padEnd(10)} ${secs}s  引擎=${mv.engine}`);
+    const budget = `visits=${p.visits} maxTime=${p.maxTime}s`;
+    log(`${id.padEnd(4)} ${budget.padEnd(28)} -> ${desc.padEnd(10)} 实际 ${secs}s  引擎=${mv.engine}`);
   }
 
   await mgr.shutdown();

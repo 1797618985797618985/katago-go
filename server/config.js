@@ -49,11 +49,6 @@ const DEFAULTS = {
     path: '',
     model: '',
     fastModel: '',
-    humanModel: '',
-    useHumanModel: true,
-    /** 不超过这个难度序号（默认 3 段）时使用人类风格模型 */
-    humanModelMaxIndex: 33,
-    config: 'engine/gtp.cfg',
     threads: 8,
     /** auto | main | fast */
     strength: 'auto',

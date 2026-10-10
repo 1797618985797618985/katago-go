@@ -6,7 +6,14 @@ const path = require('node:path');
 const { KataGoEngine, probeBuilds } = require('./katago');
 const { BuiltinEngine } = require('./builtin');
 const { loadConfig, discoverModels, resolvePath } = require('../config');
-const { paramsForLevel, findLevel, LEVELS, levelIndexFromVisits } = require('./levels');
+const {
+  paramsForLevel,
+  findLevel,
+  LEVELS,
+  levelIndexFromVisits,
+  getVisitsPerSecond,
+  setVisitsPerSecond,
+} = require('./levels');
 
 /**
  * 引擎管理器。
@@ -17,18 +24,18 @@ const { paramsForLevel, findLevel, LEVELS, levelIndexFromVisits } = require('./l
  *      否则 19 路一步要等几十秒，等于不能用
  *   3. 能撑到几段 —— 由"单步目标耗时"反推，结果会显示在界面上
  *
- * 另外会起两个 KataGo 进程：
- *   main  ：主权重 + default_gtp.cfg        —— 段位/高难度，靠搜索变强
- *   human ：主权重 + 人类模型 + 官方 human 配置 —— 级位/低段，像人一样下
- * 人类配置里有一批"关闭噪声剪枝、关 LCB、改温度"的参数是配置文件级的，
- * 和普通搜索混在一个进程里会互相污染，所以分开跑最干净。
+ * 只起一个 KataGo 进程：主权重 + default_gtp.cfg，靠搜索加难度。
+ * 早先还有第二个进程跑人类风格模型（级位/低段拟人化），实测那条路每步
+ * 4~8 秒且时间压不下来，已经整个去掉 —— 详见 levels.js 顶部的说明。
  */
 
-/** 目标：单步思考时间不超过这个值（秒），据此反推能稳定支持的最高难度。 */
-const TARGET_MOVE_SECONDS = 8;
-
-/** 用人类模型时，一步至少留这么多访问给"要不要 pass / 认输"的判断。 */
-const HUMAN_MIN_VISITS = 40;
+// 单步时间预算由 levels.js 的比率统一控制（每 N 次访问给 1 秒）。
+// 能稳定支持到哪一档，就是"本机在这么久里能算完多少访问"：
+// 实测吞吐 × 最难档愿意等的时间 = 可支持的访问数上限。
+// 6000 是最难档的访问数，所以要除以同一个比率，两边才是同一把尺子。
+function targetMoveSeconds() {
+  return 6000 / getVisitsPerSecond();
+}
 
 class EngineManager {
   constructor() {
@@ -40,10 +47,8 @@ class EngineManager {
     this.backend = null;
     this.modelPath = '';
     this.modelKind = 'none'; // main | fast | none
-    this.humanModelPath = '';
 
     this.main = null; // KataGoEngine（普通搜索）
-    this.human = null; // KataGoEngine（人类风格）
     this.builtin = new BuiltinEngine();
 
     this.visitsPerSec = 0;
@@ -82,6 +87,10 @@ class EngineManager {
 
   // ------------------------------------------------------------ 初始化
   async init() {
+    // 时间预算比率允许在 config.json 里覆盖，必须在算难度之前生效
+    if (this.cfg.katago.visitsPerSecond != null) {
+      setVisitsPerSecond(this.cfg.katago.visitsPerSecond);
+    }
     this.status = 'probing';
     const probed = probeBuilds({ force: true });
     this.builds = probed.filter((b) => b.ok);
@@ -117,11 +126,6 @@ class EngineManager {
 
     this.modelPath = model;
     this.modelKind = fast && model === fast ? 'fast' : 'main';
-    this.humanModelPath = this.cfg.katago.useHumanModel
-      ? this.cfg.katago.humanModel
-        ? resolvePath(this.cfg.katago.humanModel)
-        : this.models.human
-      : '';
 
     if (!chosen.isGpu && this.modelKind === 'main') {
       this.warnings.push('当前使用 CPU 推理，速度较慢，建议换用轻量权重或小棋盘。');
@@ -135,7 +139,7 @@ class EngineManager {
       this.main = this._createEngine('main');
       await this.main.start();
       this.visitsPerSec = await this.main.measureThroughput({ visits: 300, boardSize });
-      this.maxLevelIndex = levelIndexFromVisits(this.visitsPerSec * TARGET_MOVE_SECONDS);
+      this.maxLevelIndex = levelIndexFromVisits(this.visitsPerSec * targetMoveSeconds());
       this.status = 'ready';
       this._notify();
       console.log(
@@ -149,48 +153,16 @@ class EngineManager {
       this.main = null;
       return this._useBuiltin(`KataGo 启动失败: ${err.message}`);
     }
-
-    // 人类风格进程后台预热，不阻塞服务启动
-    if (this.humanModelPath && fs.existsSync(this.humanModelPath)) {
-      this._warmHuman().catch((err) => {
-        this.warnings.push(`人类风格模型未能启用：${err.message}`);
-        console.warn(`[engine] 人类风格模型启动失败: ${err.message}`);
-        this.human = null;
-        this._notify();
-      });
-    }
   }
 
-  _createEngine(kind) {
-    const exe = this.backend.exe;
-    const isHuman = kind === 'human';
+  _createEngine(kind = 'main') {
     return new KataGoEngine({
-      exe,
+      exe: this.backend.exe,
       model: this.modelPath,
-      humanModel: isHuman ? this.humanModelPath : '',
       threads: this.cfg.katago.threads,
       label: kind,
-      // 人类风格用官方示例配置；普通搜索用默认配置
-      configName: isHuman ? 'gtp_human5k_example.cfg' : 'default_gtp.cfg',
+      configName: 'default_gtp.cfg',
     });
-  }
-
-  async _warmHuman() {
-    if (this.human && this.human.running) return this.human;
-    // 后台预热和第一次真实调用可能同时进来，用同一个 promise 去重
-    if (!this._humanWarmPromise) {
-      this._humanWarmPromise = (async () => {
-        const eng = this._createEngine('human');
-        await eng.start();
-        this.human = eng;
-        console.log('[engine] 人类风格模型就绪（级位/低段位将使用拟人化走法）');
-        this._notify();
-        return eng;
-      })().finally(() => {
-        this._humanWarmPromise = null;
-      });
-    }
-    return this._humanWarmPromise;
   }
 
   _useBuiltin(reason) {
@@ -203,13 +175,6 @@ class EngineManager {
   }
 
   // ------------------------------------------------------------ 出子
-  /** 该难度该不该用人类风格。 */
-  _shouldUseHuman(params) {
-    if (!this.humanModelPath) return false;
-    const maxIdx = this.cfg.katago.humanModelMaxIndex != null ? this.cfg.katago.humanModelMaxIndex : 32;
-    // curve 是 0~38 的强度曲线位置，与人类模型档位一一对应
-    return params.curve <= maxIdx;
-  }
 
   async genmove(game, color, levelId, options = {}) {
     return this._enqueue(async () => {
@@ -221,38 +186,18 @@ class EngineManager {
       }
 
       if (this.main && this.main.running) {
-        const useHuman = this._shouldUseHuman(params);
         try {
-          if (useHuman) {
-            const eng = this.human && this.human.running ? this.human : await this._warmHuman();
-            const mv = await eng.genmove(game, color, this._humanParams(params), { useHuman: true });
-            return { ...mv, engine: 'katago-human' };
-          }
           const mv = await this.main.genmove(game, color, params, { useHuman: false });
           return { ...mv, engine: 'katago' };
         } catch (err) {
           console.warn(`[engine] KataGo 出子失败，改用内置引擎: ${err.message}`);
-          if (useHuman) this.human = null;
-          else this._useBuiltin(`运行中出错: ${err.message}`);
+          this._useBuiltin(`运行中出错: ${err.message}`);
         }
       }
 
       const mv = await this.builtin.genmove(game, color, params);
       return { ...mv, engine: 'builtin' };
     });
-  }
-
-  /**
-   * 人类风格下的搜索参数。
-   * 官方 5k 配置用"只看模型、几乎不搜索"来保证像人；
-   * 访问数只留给 pass/认输判断，所以这里用固定的小值。
-   */
-  _humanParams(params) {
-    return {
-      ...params,
-      visits: Math.max(HUMAN_MIN_VISITS, Math.min(120, params.visits)),
-      maxTime: Math.max(1.0, Math.min(3.0, params.maxTime)),
-    };
   }
 
   /** 人人的"提示"：固定用较强设置。 */
@@ -318,12 +263,8 @@ class EngineManager {
   }
 
   async shutdown() {
-    await Promise.all([
-      this.main ? this.main.stop() : null,
-      this.human ? this.human.stop() : null,
-    ]);
+    await Promise.all([this.main ? this.main.stop() : null]);
     this.main = null;
-    this.human = null;
   }
 
   describe() {
@@ -338,8 +279,6 @@ class EngineManager {
       backendVersion: this.main ? this.main.info.version : '',
       model: this.modelPath ? path.basename(this.modelPath) : '',
       modelKind: this.modelKind,
-      humanModel: Boolean(this.humanModelPath),
-      humanModelReady: Boolean(this.human && this.human.running),
       visitsPerSec: Number(this.visitsPerSec.toFixed(1)),
       maxLevelIndex: this.maxLevelIndex,
       recommendedMaxLevel: LEVELS[this.maxLevelIndex] ? LEVELS[this.maxLevelIndex].label : '',
@@ -353,4 +292,4 @@ class EngineManager {
   }
 }
 
-module.exports = { EngineManager, levelIndexFromVisits, TARGET_MOVE_SECONDS, HUMAN_MIN_VISITS };
+module.exports = { EngineManager, levelIndexFromVisits, targetMoveSeconds };
