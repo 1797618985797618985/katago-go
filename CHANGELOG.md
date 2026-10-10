@@ -2,6 +2,28 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.2.4] - 2026-10-10
+
+### 新增
+
+- **开发流程固化成规矩**：改动一律走 PR，并且每次改动都要同步升版本号、
+  更新 README 与 CHANGELOG。这条不再靠自觉 —— `tools/check-sync.js` 会在
+  CI 里卡住不合规的提交：只要 `server/` `public/` `desktop/` `tools/` 动过文件，
+  就要求版本号真的升过、README 改过、CHANGELOG 有对应条目
+- **`tools/github.js`：GitHub 工作流工具**（零依赖，走 gh CLI）。
+  把「建分支 → 升版本号 → 提交 → 推送 → 开 PR → 合并」做成了命令，
+  `prepare` 会一次性改掉 package.json、README 的「当前版本」和 CHANGELOG 新条目：
+  `status` / `prepare` / `open` / `merge` / `pr` 五个子命令
+- **`tools/setup-gh.ps1`：本机 GitHub 环境配置**。这台机器的网络只能走本地代理
+  （直连 github.com 会被 TLS 重置），而 git 与 gh 都不会自动读取系统代理，
+  脚本会探测可用代理端口并写进 git 配置与用户环境变量，然后引导设备码登录
+
+### 改进
+
+- `npm test` 串上了流程校验（版本号 → 流程 → 规则引擎 → 内置引擎）
+- CI 改为完整克隆（`fetch-depth: 0`），否则流程校验拿不到与 base 的共同祖先；
+  并新增「改动与版本号 / README 同步校验」一步
+
 ## [1.2.3] - 2026-10-09
 
 ### 修复

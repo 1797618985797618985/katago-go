@@ -12,6 +12,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 流程校验要和 base 分支比，浅克隆拿不到共同祖先，所以取完整历史
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -25,6 +28,13 @@ jobs:
 
       - name: 版本号一致性（package.json / README / CHANGELOG）
         run: node tools/check-version.js
+
+      # 约定：改了代码就必须同步升版本号并更新 README / CHANGELOG。
+      # PR 上拿 PR 的 base 分支比；直接推分支时拿 main 比。
+      - name: 改动与版本号 / README 同步校验
+        env:
+          CHECK_SYNC_BASE: origin/${{ github.base_ref || 'main' }}
+        run: node tools/check-sync.js
 
       - name: 规则引擎单元测试
         run: node tools/rules-test.js

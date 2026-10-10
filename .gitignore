@@ -21,3 +21,6 @@ out/
 Thumbs.db
 .vscode/
 .idea/
+
+# 本机专用的 GitHub 环境包装（含本机路径与代理端口，不进版本库）
+tools/gh-local.ps1
