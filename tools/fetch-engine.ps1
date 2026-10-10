@@ -12,10 +12,12 @@
       cuda    需要本机已安装 CUDA + cuDNN，速度最快
       cpu     Eigen 纯 CPU 版，没有独显时的兜底
 
-    以及三份权重：
+    以及两份权重：
       主权重       kata1-b18c384nbt-*     段位强度
-      人类风格权重 b18c384nbt-humanv0     级位/段位拟人化（难度分级用）
       轻量权重     kata1-b6c96-*          低配机器 / 秒开
+
+    注意：早先还会下载"人类风格权重"（b18c384nbt-humanv0）用于级位拟人化，
+    但那条路径每步要 4~8 秒且时间压不下来，功能已经去掉，权重也就不再下载了。
 
 .EXAMPLE
     pwsh -File tools/fetch-engine.ps1
@@ -31,10 +33,7 @@ param(
     [string]$Cuda = 'cuda12.8-cudnn9.8.0',
     [string]$MainNet = 'kata1-b18c384nbt-s9996604416-d4316597426',
     [string]$FastNet = 'kata1-b6c96-s175395328-d26788732',
-    [string]$HumanNetVersion = 'v1.15.0',
-    [string]$HumanNet = 'b18c384nbt-humanv0.bin.gz',
     [switch]$SkipNets,
-    [switch]$SkipHuman,
     [switch]$SkipFast,
     [switch]$SkipWarmup,
     [switch]$Force
@@ -119,13 +118,6 @@ if (-not $SkipNets) {
     $file = Join-Path $ModelDir (Split-Path $url -Leaf)
     Get-RemoteFile -Url $url -Destination $file -Label (Split-Path $url -Leaf)
 
-    if (-not $SkipHuman) {
-        Write-Host '[权重] 人类风格权重（级位/段位拟人化）'
-        $url = "https://github.com/lightvector/KataGo/releases/download/$HumanNetVersion/$HumanNet"
-        $file = Join-Path $ModelDir $HumanNet
-        Get-RemoteFile -Url $url -Destination $file -Label $HumanNet
-    }
-
     if (-not $SkipFast) {
         Write-Host '[权重] 轻量权重（低配/秒开）'
         $url = Resolve-ModelUrl -Name $FastNet
@@ -137,7 +129,6 @@ if (-not $SkipNets) {
 # ---------------------------------------------------------------- 生成配置
 Write-Host "`n生成 config.json ..."
 $mainFile = (Get-ChildItem $ModelDir -Filter 'kata1-b18c384nbt-*.bin.gz' | Select-Object -First 1).Name
-$humanFile = (Get-ChildItem $ModelDir -Filter '*human*.bin.gz' -ErrorAction SilentlyContinue | Select-Object -First 1).Name
 $fastFile = (Get-ChildItem $ModelDir -Filter 'kata1-b6c96-*.gz' -ErrorAction SilentlyContinue | Select-Object -First 1).Name
 
 $cfg = [ordered]@{
@@ -148,10 +139,10 @@ $cfg = [ordered]@{
         path          = ''
         model         = if ($mainFile) { "engine/models/$mainFile" } else { '' }
         fastModel     = if ($fastFile) { "engine/models/$fastFile" } else { '' }
-        humanModel    = if ($humanFile) { "engine/models/$humanFile" } else { '' }
-        useHumanModel = [bool]$humanFile
-        config        = 'engine/gtp.cfg'
         threads       = 8
+        # 时间预算的换算比率：每 VISITS_PER_SECOND 次访问给 1 秒。
+        # 想整体调快调慢改这里，或者直接改 server/engine/levels.js 里的默认值。
+        # visitsPerSecond = 1000
     }
     defaults = [ordered]@{ boardSize = 19; komi = 7.5; level = '10k' }
 }

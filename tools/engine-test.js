@@ -94,26 +94,46 @@ async function selfPlay(size, levelId, moves) {
     check('最弱档建议让 9 子', list[0].recommendHandicap === 9);
     check('最高档不让子', list[list.length - 1].recommendHandicap === 0);
 
-    // 人类风格档位必须落在 KataGo 支持的 rank_20k ~ rank_9d 范围内
-    const profileRe = /^rank_(\d+)([kd])$/;
-    let profilesOk = true;
-    let detail = '';
+    // 时间预算由访问数按比率推导：maxTime = visits / VISITS_PER_SECOND（含下限）
+    const { VISITS_PER_SECOND, MIN_MOVE_TIME, PDA_LIMIT, paramsForLevel } = require('../server/engine/levels');
+    const expectedTime = (visits) => Number(Math.max(MIN_MOVE_TIME, visits / VISITS_PER_SECOND).toFixed(2));
+    let timeOk = true;
+    let timeDetail = '';
     for (const l of list) {
-      const m = profileRe.exec(l.humanProfile);
-      if (!m) {
-        profilesOk = false;
-        detail = l.label + ' -> ' + l.humanProfile;
-        break;
-      }
-      const n = Number(m[1]);
-      const kind = m[2];
-      if (kind === 'k' ? n < 1 || n > 20 : n < 1 || n > 9) {
-        profilesOk = false;
-        detail = l.label + ' -> ' + l.humanProfile;
+      if (l.maxTime !== expectedTime(l.visits)) {
+        timeOk = false;
+        timeDetail = l.label + ' visits=' + l.visits + ' maxTime=' + l.maxTime + ' 期望 ' + expectedTime(l.visits);
         break;
       }
     }
-    check('人类风格档位都在 rank_20k ~ rank_9d 范围内', profilesOk, detail);
+    check('时间上限与访问数成正比（visits / VISITS_PER_SECOND）', timeOk, timeDetail);
+
+    // 访问数越多，给的时间不该更少 —— 保证"算得多的档位不会反而被卡时间"
+    let timeMonotonic = true;
+    for (let i = 1; i < list.length; i++) {
+      if (list[i].maxTime < list[i - 1].maxTime) {
+        timeMonotonic = false;
+        timeDetail = list[i - 1].label + ' -> ' + list[i].label;
+        break;
+      }
+    }
+    check('时间上限随难度单调不减', timeMonotonic, timeDetail);
+
+    // playoutDoublingAdvantage 必须落在 KataGo 接受的范围内。
+    // 曲线两端写的是 ±5.0，曾经因为没夹紧导致最弱几档被引擎直接拒绝
+    // （"Key 'playoutDoublingAdvantage' must be in the range -3 to 3"），
+    // 于是那几个档位静默掉回内置引擎 —— 这条测试就是防它复发。
+    let pdaOk = true;
+    let pdaDetail = '';
+    for (const l of levels.LEVELS) {
+      const p = paramsForLevel(l.id);
+      if (!(p.playoutDoublingAdvantage >= -PDA_LIMIT && p.playoutDoublingAdvantage <= PDA_LIMIT)) {
+        pdaOk = false;
+        pdaDetail = `${l.label} pda=${p.playoutDoublingAdvantage}（允许 ±${PDA_LIMIT}）`;
+        break;
+      }
+    }
+    check(`PDA 全部落在 ±${PDA_LIMIT} 内（引擎只接受这个范围）`, pdaOk, pdaDetail);
   }
 
   section('响应时间');

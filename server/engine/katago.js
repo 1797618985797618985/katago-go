@@ -72,13 +72,10 @@ class KataGoEngine {
   constructor(options = {}) {
     this.exe = options.exe;
     this.model = options.model;
-    this.humanModel = options.humanModel && fs.existsSync(options.humanModel) ? options.humanModel : '';
     this.threads = options.threads || 8;
-    /** 使用哪个官方配置模板：普通搜索用 default_gtp.cfg，拟人化用 human 示例 */
-    this.configName = options.configName || 'default_gtp.cfg';
     this.label = options.label || path.basename(this.model || '');
     this.client = null;
-    this.info = { name: '', version: '', humanSL: false };
+    this.info = { name: '', version: '' };
   }
 
   get running() {
@@ -88,29 +85,23 @@ class KataGoEngine {
   /**
    * 生成 -override-config 参数串。
    *
-   * 拟人化模式下只关掉日志，其余全部沿用官方 gtp_human5k_example.cfg
-   * （噪声剪枝、LCB、温度、PikLambda 等一整套参数都是为"像人"调好的，
-   * 覆盖任何一项都会让棋风或强度跑偏）。
+   * 这里设的都是"每个进程固定"的项：日志、线程数、批大小、ponder。
+   * 难度相关的参数（访问数、PDA、温度等）不在这里，而是每步通过
+   * kata-set-param 动态下发，见 applyParams()。
    */
   _baseConfig(extra = {}) {
-    const common = {
+    const overrides = {
       logDir: resolveDataPath('logs').replace(/\\/g, '/'),
       logAllGTPCommunication: false,
       logSearchInfo: false,
       logToStderr: false,
+      numSearchThreads: this.threads,
+      nnMaxBatchSize: 8,
+      ponderingEnabled: false,
+      maxVisits: 200,
+      maxTime: 2.0,
+      ...extra,
     };
-    const isHuman = this.configName !== 'default_gtp.cfg';
-    const overrides = isHuman
-      ? { ...common, ...extra }
-      : {
-          ...common,
-          numSearchThreads: this.threads,
-          nnMaxBatchSize: 8,
-          ponderingEnabled: false,
-          maxVisits: 200,
-          maxTime: 2.0,
-          ...extra,
-        };
     // 缓存目录必须显式指定：KataGo 在 Windows 上默认把 OpenCL 调优结果写进
     // "当前目录"下的子目录，而打包成单文件 exe 后每次启动都解压到临时目录，
     // 那样调优结果每次都会丢，等于每次启动都要重做几分钟的调优。
@@ -123,11 +114,10 @@ class KataGoEngine {
   async start() {
     if (this.running) return;
     const cfgDir = path.dirname(this.exe);
-    const cfgFile = path.join(cfgDir, this.configName);
+    const cfgFile = path.join(cfgDir, 'default_gtp.cfg');
     const args = ['gtp', '-model', this.model];
     if (fs.existsSync(cfgFile)) args.push('-config', cfgFile);
     args.push('-override-config', this._baseConfig());
-    if (this.humanModel) args.push('-human-model', this.humanModel);
 
     this.client = new GtpClient({ command: this.exe, args, cwd: cfgDir });
     this.client.on('log', (line) => {
@@ -144,13 +134,12 @@ class KataGoEngine {
     // 首次加载权重 + OpenCL 首次内核调优可能需要几分钟
     this.info.name = await this.client.send('name', 600000);
     this.info.version = await this.client.send('version', 600000);
-    this.info.humanSL = Boolean(this.humanModel);
     // 能应答 name 就说明模型加载与调优都结束了
     this.info.tuning = false;
     try {
       await this.client.send('kata-set-param logSearchInfo false', 10000);
     } catch {
-      /* 老版本可能不支持 */
+      /* 这个参数不可动态设置，忽略 */
     }
   }
 
@@ -185,30 +174,18 @@ class KataGoEngine {
     }
   }
 
-  /** 应用难度参数：人类风格档位，或"削弱版"搜索参数。 */
-  async applyParams(params, { useHuman = false } = {}) {
+  /** 应用难度参数：访问数、时间上限、自我削弱与随机性。 */
+  async applyParams(params) {
     const c = this.client;
-    const sets = [];
-    if (useHuman && this.humanModel) {
-      sets.push(['humanSLProfile', params.humanProfile]);
-      // 访问数只用于判断 pass / 认输：官方建议每次至少留 30~40 次
-      sets.push(['maxVisits', params.visits]);
-      sets.push(['maxTime', params.maxTime]);
-    } else {
-      sets.push(['humanSLProfile', '']);
-      sets.push(['maxVisits', params.visits]);
-      sets.push(['maxTime', params.maxTime]);
-      sets.push(['playoutDoublingAdvantage', params.playoutDoublingAdvantage]);
-      sets.push(['rootPolicyTemperature', params.rootPolicyTemperature]);
-      sets.push(['rootNoiseEnabled', params.rootNoiseEnabled ? 'true' : 'false']);
-    }
+    const sets = [
+      ['maxVisits', params.visits],
+      ['maxTime', params.maxTime],
+      ['playoutDoublingAdvantage', params.playoutDoublingAdvantage],
+      ['rootPolicyTemperature', params.rootPolicyTemperature],
+      ['rootNoiseEnabled', params.rootNoiseEnabled ? 'true' : 'false'],
+    ];
     for (const [key, value] of sets) {
-      try {
-        await c.send(`kata-set-param ${key} ${value}`, 30000);
-      } catch (err) {
-        // humanSLProfile 在不支持时会被跳过，其余参数失败应当暴露出来
-        if (key !== 'humanSLProfile') throw err;
-      }
+      await c.send(`kata-set-param ${key} ${value}`, 30000);
     }
   }
 
@@ -223,9 +200,9 @@ class KataGoEngine {
   }
 
   /** 产生一手棋。 */
-  async genmove(game, color, params, { useHuman = false } = {}) {
+  async genmove(game, color, params) {
     await this.syncBoard(game);
-    if (params) await this.applyParams(params, { useHuman });
+    if (params) await this.applyParams(params);
     const budget = (params ? params.maxTime : 2) * 1000;
     return this._genmoveRaw(game, color, Math.max(60000, budget + 120000));
   }
@@ -246,14 +223,13 @@ class KataGoEngine {
       playoutDoublingAdvantage: 0,
       rootPolicyTemperature: 1,
       rootNoiseEnabled: false,
-      humanProfile: '',
     };
 
-    await this.applyParams({ ...clean, visits: warmupVisits }, { useHuman: false });
+    await this.applyParams({ ...clean, visits: warmupVisits });
     await this.client.send('genmove B', 300000);
 
     await this.client.send('clear_board', 30000);
-    await this.applyParams({ ...clean, visits }, { useHuman: false });
+    await this.applyParams({ ...clean, visits });
     const t0 = Date.now();
     await this.client.send('genmove B', 600000);
     const elapsed = (Date.now() - t0) / 1000;
@@ -305,17 +281,13 @@ class KataGoEngine {
   async analyze(game, { visits = 120, maxMs = 4000, intervalMs = 120 } = {}) {
     if (!this.running) return null;
     await this.syncBoard(game);
-    await this.applyParams(
-      {
-        visits,
-        maxTime: Math.max(1, maxMs / 1000),
-        playoutDoublingAdvantage: 0,
-        rootPolicyTemperature: 1,
-        rootNoiseEnabled: false,
-        humanProfile: '',
-      },
-      { useHuman: false },
-    );
+    await this.applyParams({
+      visits,
+      maxTime: Math.max(1, maxMs / 1000),
+      playoutDoublingAdvantage: 0,
+      rootPolicyTemperature: 1,
+      rootNoiseEnabled: false,
+    });
 
     const lines = [];
     const onLog = (line) => {
